@@ -19,7 +19,6 @@ class ProgramResponse(BaseModel):
     """프로그램 응답"""
     pgm_id: str
     pgm_name: str
-    document_id: Optional[str]
     pgm_version: Optional[str]
     description: Optional[str]
     create_dt: datetime

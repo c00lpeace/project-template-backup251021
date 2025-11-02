@@ -24,7 +24,7 @@ class PlcCrud:
     def __init__(self, db: Session):
         self.db = db
     
-    # ========== 기존 PLC CRUD 메서드들 (변경 없음) ==========
+    # ========== 기존 PLC CRUD 메서드들 ==========
     
     def create_plc(
         self,

@@ -58,6 +58,9 @@ class Document(Base):
     # 문서 타입
     document_type = Column('DOCUMENT_TYPE', String(20), nullable=True, default='common')
     
+    # 프로그램 연결 (ZIP 업로드 시 사용)
+    pgm_id = Column('PGM_ID', String(50), nullable=True, index=True)
+    
     # 처리 상태
     status = Column('STATUS', String(20), nullable=False, server_default='processing')
     total_pages = Column('TOTAL_PAGES', Integer, default=0, nullable=True)

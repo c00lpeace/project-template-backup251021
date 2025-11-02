@@ -15,8 +15,7 @@ class Program(Base):
     __tablename__ = "PROGRAMS"
     
     pgm_id = Column('PGM_ID', String(50), primary_key=True)
-    pgm_name = Column('PGM_NAME', String(200), nullable=False)
-    document_id = Column('DOCUMENT_ID', String(100), nullable=True)
+    pgm_name = Column('PGM_NAME', String(200), nullable=False)    
     pgm_version = Column('PGM_VERSION', String(20), nullable=True)
     description = Column('DESCRIPTION', String(1000), nullable=True)
     create_dt = Column('CREATE_DT', DateTime, nullable=False, server_default=func.now())

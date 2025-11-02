@@ -252,6 +252,139 @@ update_user: str               # 수정자 ⭐ 확인됨 (실제 존재)
 
 ## ✨ 최근 변경사항
 
+### 2025-11-02 - ZIP 파일 업로드 PGM_ID 기반 시스템 개편 ⭐ UPDATE
+
+**개요:**
+- ZIP 파일 업로드 시 압축 해제 후 각 파일을 DOCUMENTS 테이블에 독립적으로 저장
+- PGM_ID로 프로그램별 문서 관리
+- 원본 ZIP 파일 저장 선택 기능
+
+**수정된 컴포너트:**
+```
+1. ✅ shared_core/models.py - Document 모델
+   - PGM_ID 커럼 추가 (nullable, indexed)
+   
+2. ✅ shared_core/crud.py - DocumentCRUD
+   - create_document() 메서드에 pgm_id 파라미터 추가
+   
+3. ✅ shared_core/services.py - DocumentService
+   - _document_to_dict()에 pgm_id 필드 추가
+   
+4. ✅ ai_backend/api/services/document_service.py
+   - upload_zip_document() 완전 재작성
+     • 파라미터: pgm_id (필수), keep_zip_file (True/False)
+     • 과정: PGM_ID 검증 → 압축 해제 → DOCUMENTS 테이블 저장
+   
+   - _extract_and_save_to_db() 새로운 메서드
+     • 폴더 구조: /uploads/{user_id}/{pgm_id}/
+     • 각 파일마다 DOCUMENTS 테이블에 저장
+     • pgm_id 부여
+   
+   - _save_original_zip() 새로운 메서드
+     • 폴더 구조: /uploads/{user_id}/zipfiles/
+     • 원본 ZIP 파일도 DOCUMENTS 테이블에 저장
+
+5. ✅ ai_backend/api/routers/document_router.py
+   - POST /v1/upload-zip API 업데이트
+     • 필수 파라미터: pgm_id
+     • 선택 파라미터: keep_zip_file (default=True)
+     • extract_files 파라미터 제거 (항상 압축 해제)
+```
+
+**주요 기능:**
+```
+1. 압축 해제 및 개별 파일 저장
+   - ZIP 내부 파일들을 /uploads/{user_id}/{pgm_id}/에 저장
+   - 각 파일이 DOCUMENTS 테이블에 독립적인 레코드로 저장
+   - 모든 파일에 pgm_id 부여
+
+2. PGM_ID 기반 조회
+   - GET /v1/documents?pgm_id={pgm_id} 로 프로그램별 문서 조회 가능
+   - 기존 API들을 그대로 사용
+     • GET /v1/documents/{document_id}
+     • GET /v1/documents/{document_id}/download
+
+3. 원본 ZIP 저장 선택
+   - keep_zip_file=true: /uploads/{user_id}/zipfiles/에 저장
+   - keep_zip_file=false: 원본 ZIP 저장 안함
+   - 원본 ZIP도 DOCUMENTS 테이블에 기록
+
+4. PGM_ID 검증
+   - PROGRAM 테이블에 존재하는 pgm_id만 허용
+   - 유효하지 않은 pgm_id는 업로드 거부
+```
+
+**사용 예시:**
+```bash
+# 1. ZIP 파일 업로드 (원본 ZIP 저장)
+curl -X POST http://localhost:8000/v1/upload-zip \
+  -F "file=@myfiles.zip" \
+  -F "pgm_id=PGM001" \
+  -F "user_id=testuser" \
+  -F "keep_zip_file=true"
+
+# 2. ZIP 파일 업로드 (원본 ZIP 저장 안함)
+curl -X POST http://localhost:8000/v1/upload-zip \
+  -F "file=@myfiles.zip" \
+  -F "pgm_id=PGM001" \
+  -F "user_id=testuser" \
+  -F "keep_zip_file=false"
+
+# 3. 프로그램별 문서 조회
+curl "http://localhost:8000/v1/documents?user_id=testuser&pgm_id=PGM001"
+
+# 4. 개별 파일 다운로드
+curl http://localhost:8000/v1/documents/{document_id}/download
+```
+
+**폴더 구조:**
+```
+/uploads/
+  ├─ {user_id}/
+  │   ├─ {pgm_id}/              # 프로그램별 폴더
+  │   │   ├─ file1.txt         # ZIP에서 추출된 파일들
+  │   │   ├─ file2.py
+  │   │   └─ folder/
+  │   │       └─ file3.log
+  │   │
+  │   └─ zipfiles/            # 원본 ZIP 파일 보관
+  │       ├─ 20251102_100000_archive1.zip
+  │       └─ 20251102_110000_archive2.zip
+```
+
+**DOCUMENTS 테이블 데이터 예시:**
+```sql
+-- 원본 ZIP (keep_zip_file=true인 경우)
+DOCUMENT_ID | PGM_ID  | FILE_NAME     | FILE_PATH                           | DOCUMENT_TYPE
+doc-001     | PGM001  | archive.zip   | /uploads/user/zipfiles/2025...zip  | zip
+
+-- 추출된 파일들
+doc-002     | PGM001  | file1.txt     | /uploads/user/PGM001/file1.txt      | common
+doc-003     | PGM001  | file2.py      | /uploads/user/PGM001/file2.py       | common  
+doc-004     | PGM001  | file3.log     | /uploads/user/PGM001/folder/file3.log | common
+```
+
+**파일 킨 API:**
+```
+❌ 삭제됨 (ZIP 내부 파일이 DOCUMENTS에 저장되므로 불필요)
+- GET /v1/zip/{document_id}/contents
+- GET /v1/zip/{document_id}/extract/{file_path}
+
+→ 대체: 기존 DOCUMENTS API 사용
+- GET /v1/documents?pgm_id={pgm_id}
+- GET /v1/documents/{document_id}/download
+```
+
+**DB 마이그레이션 필요:**
+```sql
+-- PGM_ID 커럼 추가
+ALTER TABLE DOCUMENTS 
+ADD COLUMN PGM_ID VARCHAR(50) NULL;
+
+CREATE INDEX idx_documents_pgm_id 
+ON DOCUMENTS(PGM_ID);
+```
+
 ### 2025-10-20 01:31:00 - Excel 업로드 및 에러 처리 개선 ⭐ UPDATE
 
 **수정된 컴포넌트:**

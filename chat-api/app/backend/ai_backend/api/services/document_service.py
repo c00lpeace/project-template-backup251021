@@ -8,6 +8,7 @@ from ai_backend.types.response.exceptions import HandledException
 from ai_backend.types.response.response_code import ResponseCode
 from fastapi import UploadFile
 from sqlalchemy.orm import Session
+from ai_backend.database.crud.program_crud import ProgramCrud
 
 # 공통 모듈 사용
 from shared_core import Document
@@ -24,6 +25,7 @@ class DocumentService(BaseDocumentService):
         # 환경변수에서 업로드 경로 가져오기 (k8s 환경 대응)
         upload_path = upload_base_path or settings.upload_base_path
         super().__init__(db, upload_path)
+        self.program_crud = ProgramCrud(db)
 
     def upload_document(
         self,
@@ -383,81 +385,112 @@ class DocumentService(BaseDocumentService):
     def upload_zip_document(
         self,
         file: UploadFile,
+        pgm_id: str,
         user_id: str,
         is_public: bool = False,
         permissions: List[str] = None,
-        extract_files: bool = False
+        keep_zip_file: bool = True
     ) -> Dict:
-        """zip 파일 업로드 및 내부 파일 분석
+        """ZIP 파일 업로드 및 압축 해제 후 각 파일을 DOCUMENTS 테이블에 저장
         
         Args:
-            extract_files: True면 압축 해제해서 저장, False면 압축 파일 그대로 저장
+            file: ZIP 파일
+            pgm_id: 프로그램 ID (필수)
+            user_id: 사용자 ID
+            is_public: 공개 여부
+            permissions: 권한 리스트
+            keep_zip_file: True=원본 ZIP 저장, False=저장 안함
         """
         import zipfile
         from datetime import datetime
         from pathlib import Path
         
+        import os
+        import tempfile
+        
         try:
-            # 확장자 체크
+            # 1. 확장자 체크
             if not file.filename.endswith('.zip'):
                 raise HandledException(
                     ResponseCode.DOCUMENT_INVALID_FILE_TYPE,
                     msg="zip 파일만 업로드 가능합니다"
                 )
             
-            # 1. 기존 upload_document로 파일 저장
-            result = self.upload_document(
-                file=file,
-                user_id=user_id,
-                is_public=is_public,
-                permissions=permissions,
-                document_type='zip'
-            )
+            # 2. PGM_ID 유효성 검증
+            # from ai_backend.database.crud.program_crud import ProgramCrud
+            # program = ProgramCrud.get_program_by_id(self.db, pgm_id)
+            program = self.program_crud.get_program_by_id(pgm_id)
+            if not program:
+                raise HandledException(
+                    ResponseCode.INVALID_DATA_FORMAT,
+                    msg=f"존재하지 않는 프로그램 ID입니다: {pgm_id}"
+                )
             
-            document_id = result['document_id']
-            upload_path = result['upload_path']
+            # 3. ZIP 파일 읽기
+            file_content = file.file.read()
+            file.file.seek(0)  # 포인터 초기화
             
-            # 2. 압축 해제 여부에 따라 분기
-            if extract_files:
-                # 압축 해제 모드
-                extraction_result = self._extract_and_store_zip(upload_path, document_id, user_id)
-                zip_contents = extraction_result['zip_contents']
-            else:
-                # 압축 파일 그대로 모드 (기존)
-                zip_contents = self._analyze_zip_file(upload_path)
-            
-            # 3. metadata_json 업데이트
-            from shared_core.crud import DocumentCRUD
-            doc_crud = DocumentCRUD(self.db)
-            
-            metadata = {
-                'storage_type': 'extracted' if extract_files else 'compressed',
-                'extracted_path': extraction_result.get('extracted_path') if extract_files else None,
-                'zip_summary': {
-                    'total_files': len(zip_contents['files']),
-                    'total_directories': sum(1 for f in zip_contents['files'] if f['is_directory']),
-                    'total_size': sum(f['size'] for f in zip_contents['files']),
-                    'total_uncompressed_size': sum(f['uncompressed_size'] for f in zip_contents['files']),
-                    'file_type_stats': zip_contents['file_type_stats']
-                },
-                'files': zip_contents['files']
-            }
-            
-            doc_crud.update_document(document_id, metadata_json=metadata)
-            
-            # 4. 결과 반환
-            result['zip_info'] = {
-                'total_files': metadata['zip_summary']['total_files'],
-                'total_directories': metadata['zip_summary']['total_directories'],
-                'file_types': metadata['zip_summary']['file_type_stats']
-            }
-            
-            return result
+            # 4. 임시로 ZIP 파일 저장 (압축 해제용)
+            temp_zip_path = None
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.zip') as temp_file:
+                    temp_file.write(file_content)
+                    temp_zip_path = temp_file.name
+                
+                # 5. 압축 해제 및 파일 저장
+                result = self._extract_and_save_to_db(
+                    zip_path=temp_zip_path,
+                    pgm_id=pgm_id,
+                    user_id=user_id,
+                    is_public=is_public,
+                    permissions=permissions
+                )
+                
+                # 6. 원본 ZIP 파일 저장 (선택사항)
+                zip_file_info = None
+                if keep_zip_file:
+                    file.file.seek(0)  # 포인터 재초기화
+                    zip_file_info = self._save_original_zip(
+                        file=file,
+                        pgm_id=pgm_id,
+                        user_id=user_id,
+                        is_public=is_public,
+                        permissions=permissions,
+                        extracted_file_count=result['total_files']
+                    )
+                
+                # 7. 결과 반환
+                response = {
+                    'zip_file': zip_file_info,
+                    'extracted_files': result['extracted_files'],
+                    'summary': {
+                        'pgm_id': pgm_id,
+                        'total_files': result['total_files'],
+                        'success_count': result['success_count'],
+                        'failed_count': result['failed_count'],
+                        'failed_files': result['failed_files'],
+                        'zip_saved': keep_zip_file,
+                        'extraction_path': result['extraction_path']
+                    }
+                }
+                
+                logger.info(f"ZIP 업로드 완료: {file.filename}, PGM_ID={pgm_id}, "
+                          f"성공={result['success_count']}, 실패={result['failed_count']}")
+                
+                return response
+                
+            finally:
+                # 임시 ZIP 파일 삭제
+                if temp_zip_path and os.path.exists(temp_zip_path):
+                    try:
+                        os.unlink(temp_zip_path)
+                    except Exception as e:
+                        logger.warning(f"임시 ZIP 파일 삭제 실패: {e}")
             
         except HandledException:
             raise
         except Exception as e:
-            logger.error(f"zip 파일 업로드 실패: {str(e)}")
+            logger.error(f"ZIP 파일 업로드 실패: {str(e)}")
             raise HandledException(ResponseCode.DOCUMENT_UPLOAD_ERROR, e=e)
     
     def _extract_and_store_zip(self, zip_path: str, document_id: str, user_id: str) -> Dict:
@@ -762,3 +795,164 @@ class DocumentService(BaseDocumentService):
         except Exception as e:
             logger.error(f"zip 파일 추출 실패: {str(e)}")
             raise HandledException(ResponseCode.DOCUMENT_DOWNLOAD_ERROR, e=e)
+    
+    # ========================================
+    # ⭐ 새로운 ZIP 업로드 메서드들
+    # ========================================
+    
+    def _extract_and_save_to_db(
+        self,
+        zip_path: str,
+        pgm_id: str,
+        user_id: str,
+        is_public: bool = False,
+        permissions: List[str] = None
+    ) -> Dict:
+        """ZIP 파일 압축 해제 및 각 파일을 DOCUMENTS 테이블에 저장"""
+        import os
+        import zipfile
+        from pathlib import Path
+        from collections import defaultdict
+        
+        try:
+            # 1. 압축 해제 대상 디렉토리 설정
+            extraction_base = Path(self.upload_base_path) / user_id / pgm_id
+            extraction_base.mkdir(parents=True, exist_ok=True)
+            
+            extracted_files = []
+            failed_files = []
+            success_count = 0
+            failed_count = 0
+            
+            # 2. ZIP 파일 열기
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                file_list = zip_ref.infolist()
+                
+                for info in file_list:
+                    try:
+                        # 디렉토리는 스킵
+                        if info.is_dir():
+                            continue
+                        
+                        # 파일 경로 및 이름 추출
+                        file_relative_path = info.filename
+                        file_name = Path(file_relative_path).name
+                        
+                        # 압축 해제된 파일 경로
+                        extracted_file_path = extraction_base / file_relative_path
+                        extracted_file_path.parent.mkdir(parents=True, exist_ok=True)
+                        
+                        # 파일 압축 해제
+                        with zip_ref.open(info.filename) as source:
+                            file_content = source.read()
+                            with open(extracted_file_path, 'wb') as target:
+                                target.write(file_content)
+                        
+                        # 3. DOCUMENTS 테이블에 저장
+                        file_extension = Path(file_name).suffix.lower() or '.unknown'
+                        file_size = len(file_content)
+                        
+                        # create_document_from_file 호출
+                        doc_result = self.create_document_from_file(
+                            file_content=file_content,
+                            filename=file_name,
+                            user_id=user_id,
+                            is_public=is_public,
+                            permissions=permissions,
+                            document_type='common',
+                            metadata_json={
+                                'original_zip_path': file_relative_path,
+                                'extracted_from_zip': True
+                            },
+                            pgm_id=pgm_id
+                        )
+                        
+                        extracted_files.append({
+                            'document_id': doc_result['document_id'],
+                            'file_name': file_name,
+                            'relative_path': file_relative_path,
+                            'file_size': file_size,
+                            'file_extension': file_extension
+                        })
+                        
+                        success_count += 1
+                        
+                    except Exception as e:
+                        logger.error(f"파일 저장 실패: {info.filename}, 오류: {str(e)}")
+                        failed_files.append({
+                            'file_name': info.filename,
+                            'error': str(e)
+                        })
+                        failed_count += 1
+            
+            return {
+                'extracted_files': extracted_files,
+                'total_files': len(file_list) - sum(1 for f in file_list if f.is_dir()),
+                'success_count': success_count,
+                'failed_count': failed_count,
+                'failed_files': failed_files,
+                'extraction_path': str(extraction_base)
+            }
+            
+        except zipfile.BadZipFile:
+            raise HandledException(
+                ResponseCode.DOCUMENT_INVALID_FILE_TYPE,
+                msg="손상된 ZIP 파일입니다"
+            )
+        except Exception as e:
+            logger.error(f"ZIP 파일 압축 해제 실패: {str(e)}")
+            raise
+    
+    def _save_original_zip(
+        self,
+        file: UploadFile,
+        pgm_id: str,
+        user_id: str,
+        is_public: bool = False,
+        permissions: List[str] = None,
+        extracted_file_count: int = 0
+    ) -> Dict:
+        """원본 ZIP 파일을 zipfiles 폴더에 저장"""
+        from pathlib import Path
+        import os
+        from datetime import datetime
+        
+        try:
+            # 1. zipfiles 폴더 생성
+            zipfiles_dir = Path(self.upload_base_path) / user_id / 'zipfiles'
+            zipfiles_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 2. 파일 저장 경로 생성
+            file_name = file.filename
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            safe_filename = f"{timestamp}_{file_name}"
+            zip_file_path = zipfiles_dir / safe_filename
+            
+            # 3. 파일 저장
+            file_content = file.file.read()
+            with open(zip_file_path, 'wb') as f:
+                f.write(file_content)
+            
+            # 4. DOCUMENTS 테이블에 저장
+            doc_result = self.create_document_from_file(
+                file_content=file_content,
+                filename=file_name,
+                user_id=user_id,
+                is_public=is_public,
+                permissions=permissions,
+                document_type='zip',
+                metadata_json={
+                    'is_original_zip': True,
+                    'extracted_file_count': extracted_file_count,
+                    'stored_in_zipfiles': True
+                },
+                pgm_id=pgm_id
+            )
+            
+            logger.info(f"원본 ZIP 파일 저장 완료: {file_name}, document_id={doc_result['document_id']}")
+            
+            return doc_result
+            
+        except Exception as e:
+            logger.error(f"원본 ZIP 파일 저장 실패: {str(e)}")
+            raise

@@ -714,22 +714,34 @@ def get_processing_progress(
 @router.post("/upload-zip")
 async def upload_zip_file(
     file: UploadFile = File(...),
+    pgm_id: str = Form(..., description="프로그램 ID (필수)"),
     user_id: str = Form("user"),
     is_public: bool = Form(False),
-    extract_files: bool = Form(False, description="True면 압축 해제해서 저장"),
+    keep_zip_file: bool = Form(True, description="True=원본 ZIP 저장, False=저장 안함"),
     document_service: DocumentService = Depends(get_document_service)
 ):
-    """zip 파일 업로드 및 내부 파일 분석
+    """ZIP 파일 업로드 및 압축 해제 후 각 파일을 DOCUMENTS 테이블에 저장
     
     Args:
-        extract_files: False(기본) - 압축 파일 그대로 저장, True - 압축 해제해서 저장
+        file: ZIP 파일
+        pgm_id: 프로그램 ID (필수)
+        user_id: 사용자 ID
+        is_public: 공개 여부
+        keep_zip_file: True=원본 ZIP 저장, False=저장 안함
+        
+    Process:
+        1. PGM_ID 유효성 검증
+        2. ZIP 압축 해제 → /uploads/{user_id}/{pgm_id}/
+        3. 각 파일 → DOCUMENTS 테이블 입력 (pgm_id 부여)
+        4. keep_zip_file=true → /uploads/{user_id}/zipfiles/에 원본 ZIP 저장
     """
     try:
         result = document_service.upload_zip_document(
             file=file,
+            pgm_id=pgm_id,
             user_id=user_id,
             is_public=is_public,
-            extract_files=extract_files
+            keep_zip_file=keep_zip_file
         )
         
         return {

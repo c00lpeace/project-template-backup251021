@@ -33,8 +33,7 @@ def create_program(
     """프로그램을 생성합니다."""
     program = program_service.create_program(
         pgm_id=request.pgm_id,
-        pgm_name=request.pgm_name,
-        document_id=request.document_id,
+        pgm_name=request.pgm_name,        
         pgm_version=request.pgm_version,
         description=request.description,
         create_user=request.create_user,
@@ -87,8 +86,7 @@ def update_program(
     """프로그램을 수정합니다."""
     program = program_service.update_program(
         pgm_id=pgm_id,
-        pgm_name=request.pgm_name,
-        document_id=request.document_id,
+        pgm_name=request.pgm_name,        
         pgm_version=request.pgm_version,
         description=request.description,
         notes=request.notes,

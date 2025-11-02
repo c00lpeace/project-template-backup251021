@@ -49,7 +49,8 @@ class DocumentCRUD:
         processing_config: dict = None,
         processed_at: datetime = None,
         permissions: List[str] = None,
-        document_type: str = 'common'
+        document_type: str = 'common',
+        pgm_id: str = None
     ) -> Document:
         """문서 생성"""
         try:
@@ -80,6 +81,7 @@ class DocumentCRUD:
                 processed_at=processed_at,
                 permissions=permissions,
                 document_type=document_type,
+                pgm_id=pgm_id,
                 create_dt=datetime.now()
             )
             self.db.add(document)

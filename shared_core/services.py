@@ -368,6 +368,7 @@ class DocumentService:
             "processing_config": document.processing_config,
             "permissions": document.permissions or [],
             "document_type": document.document_type or "common",
+            "pgm_id": document.pgm_id,
             "create_dt": document.create_dt.isoformat(),
             "updated_at": (
                 document.updated_at.isoformat() if document.updated_at else None
