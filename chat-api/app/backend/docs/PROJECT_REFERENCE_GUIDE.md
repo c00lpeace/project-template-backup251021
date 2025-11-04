@@ -1,6 +1,6 @@
 # 🏗️ PLC-Program Mapping System - 프로젝트 참조 가이드
 
-> **최종 업데이트:** 2025-10-21 13:50:00 (화요일 오후 1시 50분)  
+> **최종 업데이트:** 2025-11-04 (월요일)  
 > **목적:** Claude가 매번 파일을 검색하지 않고 빠르게 프로젝트 구조를 파악하기 위한 참조 문서
 
 ---
@@ -251,6 +251,171 @@ update_user: str               # 수정자 ⭐ 확인됨 (실제 존재)
 ---
 
 ## ✨ 최근 변경사항
+
+### 2025-11-04 - ZIP 업로드 로직 최적화 ⭐ NEW
+
+**개요:**
+- pgm_id 검증을 soft validation으로 변경 (경고만 출력)
+- 임시파일 제거, 메모리에서 직접 처리
+- ZIP 저장경로 단순화 (`/uploads/zipfiles/`)
+- 새로운 메서드 `save_extracted_file_to_db()` 추가
+
+**수정된 컴포넌트:**
+```
+1. ✅ ai_backend/api/services/document_service.py
+   - save_extracted_file_to_db() 신규 메서드 추가
+     • ZIP 추출 파일 전용 저장 로직
+     • 확장자 기반 document_type 자동 판단
+     • ZIP 전용 metadata 구성
+     • actual_file_path 파라미터로 실제 디스크 경로 전달 ⭐
+     • document_crud.create_document() 직접 호출 (shared_core 의존성 최소화) ⭐
+   
+   - upload_zip_document() 수정
+     • pgm_id 검증: 실패 시 예외 발생 → 경고 로그만 출력
+     • 임시파일 제거: tempfile 사용 → io.BytesIO로 메모리 처리
+     • import 문 정리 (tempfile, os 제거)
+   
+   - _extract_and_save_to_db() 수정
+     • 시그니처 변경: zip_path (str) → zip_bytes (bytes)
+     • 메모리 처리: zipfile.ZipFile(io.BytesIO(zip_bytes))
+     • save_extracted_file_to_db() 호출로 변경
+   
+   - _save_original_zip() 수정
+     • 경로 변경: /uploads/{user_id}/zipfiles/ → /uploads/zipfiles/
+     • 파일명에 user_id 포함: {timestamp}_{file_name} → {timestamp}_{user_id}_{file_name}
+     • document_crud.create_document() 직접 호출 (shared_core 의존성 최소화) ⭐
+```
+
+**주요 변경사항:**
+```
+1. pgm_id 검증 방식 (soft validation)
+   - 변경 전: 미등록 시 HandledException 발생
+   - 변경 후: logger.warning만 출력하고 계속 진행
+   - 이유: 유연성 향상, 느슨한 결합 (Loose Coupling)
+
+2. 메모리 처리
+   - 변경 전: tempfile.NamedTemporaryFile로 디스크에 임시 저장
+   - 변경 후: io.BytesIO로 메모리에서 직접 처리
+   - 이유: 디스크 I/O 제거, 속도 향상, 코드 간결화
+
+3. ZIP 저장경로 단순화
+   - 변경 전: /uploads/{user_id}/zipfiles/
+   - 변경 후: /uploads/zipfiles/
+   - 파일명: {timestamp}_{user_id}_{file_name} (충돌 방지)
+   - 이유: 경로 구조 단순화, 중앙 관리
+
+4. 메서드 분리 (Layered Architecture)
+   - 신규: save_extracted_file_to_db()
+   - 역할:
+     • ZIP 추출 파일을 DOCUMENTS 테이블에 저장
+     • ZIP 전용 metadata 구성
+     • 확장자 기반 document_type 자동 판단
+     • document_crud.create_document() 직접 호출 (shared_core 의존성 최소화) ⭐
+   - 이유: 책임 분리, 재사용성, 테스트 용이성, 느슨한 결합
+```
+
+**수정 후 데이터 흐름:**
+```
+Client
+    ↓
+1. ZIP 파일 + pgm_id 업로드
+    POST /v1/upload-zip
+    - file: myfiles.zip
+    - pgm_id: PGM001 (미등록 가능)
+    ↓
+2. document_service.upload_zip_document()
+    ├─ pgm_id 검증 (경고만 출력) ⭐
+    ├─ file_content = file.file.read()
+    └─ 메모리에 ZIP 데이터 보관 ⭐
+    ↓
+3. document_service._extract_and_save_to_db(zip_bytes=file_content) ⭐
+    ├─ io.BytesIO(zip_bytes)로 ZIP 열기 ⭐
+    ├─ /uploads/PGM001/ 폴더 생성
+    └─ 각 파일 추출
+        ↓
+        save_extracted_file_to_db() ⭐ NEW
+        ├─ ZIP 전용 metadata 구성
+        ├─ document_type 자동 판단
+        ├─ document_id 생성 (UUID)
+        └─ document_crud.create_document() 호출 ⭐
+            → DOCUMENTS 테이블 저장
+    ↓
+4. document_service._save_original_zip() (keep_zip_file=true)
+    ├─ /uploads/zipfiles/ 폴더 생성 ⭐
+    ├─ 파일록: {timestamp}_{user_id}_{filename} ⭐
+    ├─ 파일 디스크에 저장
+    ├─ document_id 생성 (UUID)
+    └─ document_crud.create_document() 호출 ⭐
+        → DOCUMENTS 테이블 저장
+    ↓
+5. 응답 반환
+```
+
+**수정 후 폴더 구조:**
+```
+/uploads/
+  ├─ {pgm_id}/                    # 프로그램별 추출 파일 (변경 없음)
+  │   ├─ file1.txt
+  │   ├─ file2.py
+  │   └─ folder/
+  │       └─ file3.log
+  │
+  └─ zipfiles/                    # ⭐ 변경: user_id 제거
+      ├─ 20251104_100000_testuser_archive1.zip
+      ├─ 20251104_110000_admin_archive2.zip
+      └─ 20251104_120000_user123_data.zip
+```
+
+**기대 효과:**
+```
+✅ 성능 향상: 디스크 I/O 제거로 속도 향상
+✅ 코드 간결화: 임시파일 생성/삭제 로직 제거
+✅ 유연성 향상: pgm_id 미등록 상태로도 업로드 가능
+✅ 아키텍처 개선: 메서드 분리로 Layered Architecture 강화
+✅ 의존성 최소화: shared_core 의존성 감소, 느슨한 결합 (Loose Coupling) ⭐
+✅ 경로 단순화: 중앙 집중식 관리
+```
+
+**✅ 최종 확인 및 검증 완료 (2025-11-04 오후):**
+```
+1. ✅ save_extracted_file_to_db() - 실제 경로 전달 확인
+   • 파라미터: actual_file_path (실제 디스크 저장 경로)
+   • 호출 시: save_extracted_file_to_db(..., actual_file_path=str(extracted_file_path))
+   • DB 저장: document_crud.create_document(file_path=actual_file_path) ✅
+   • 검증 완료: 실제 저장된 경로가 DOCUMENTS 테이블에 기록됨
+
+2. ✅ _save_original_zip() - 실제 경로 전달 확인
+   • 파일 저장: zip_file_path = zipfiles_dir / safe_filename
+   • 디스크 저장: with open(zip_file_path, 'wb') as f: f.write(file_content) ✅
+   • DB 저장: document_crud.create_document(file_path=str(zip_file_path)) ✅
+   • 검증 완료: 실제 저장된 경로가 DOCUMENTS 테이블에 기록됨
+
+3. ✅ 코드 흐름 검증
+   ZIP 추출 파일:
+     실제 경로: /uploads/PGM001/folder/file.txt
+     → actual_file_path 파라미터로 전달 ✅
+     → DOCUMENTS.FILE_PATH = "/uploads/PGM001/folder/file.txt" ✅
+   
+   원본 ZIP 파일:
+     실제 경로: /uploads/zipfiles/20251104_user_archive.zip
+     → str(zip_file_path) 로 전달 ✅
+     → DOCUMENTS.FILE_PATH = "/uploads/zipfiles/20251104_user_archive.zip" ✅
+
+4. ✅ 테스트 권장사항
+   • POST /v1/upload-zip API 호출
+   • DOCUMENTS 테이블 FILE_PATH 컬럼 확인
+   • 파일 다운로드 API로 실제 파일 접근 가능 여부 확인
+   • 추출된 파일들의 경로가 정확한지 확인
+```
+
+**🎯 핵심 완료 사항:**
+- ✅ file_path 파라미터에 실제 저장 경로 전달 구현 완료
+- ✅ save_extracted_file_to_db() - actual_file_path로 실제 경로 받음
+- ✅ _save_original_zip() - str(zip_file_path)로 실제 경로 전달
+- ✅ document_crud.create_document() 호출 시 실제 경로 저장됨
+- ✅ 코드 검증 완료 - 모든 경로가 실제 디스크 경로로 처리됨
+
+---
 
 ### 2025-11-02 - ZIP 파일 업로드 PGM_ID 기반 시스템 개편 ⭐ UPDATE
 

@@ -717,6 +717,7 @@ async def upload_zip_file(
     pgm_id: str = Form(..., description="프로그램 ID (필수)"),
     user_id: str = Form("user"),
     is_public: bool = Form(False),
+    permissions: Optional[str] = Form(default=None),  # JSON 문자열로 권한 리스트 전달
     keep_zip_file: bool = Form(True, description="True=원본 ZIP 저장, False=저장 안함"),
     document_service: DocumentService = Depends(get_document_service)
 ):
@@ -728,6 +729,7 @@ async def upload_zip_file(
         user_id: 사용자 ID
         is_public: 공개 여부
         keep_zip_file: True=원본 ZIP 저장, False=저장 안함
+        permissions: 권한 리스트 (JSON 문자열) -> 보류(내부 구현안함)
         
     Process:
         1. PGM_ID 유효성 검증
