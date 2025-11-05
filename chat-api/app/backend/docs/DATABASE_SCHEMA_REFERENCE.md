@@ -1,6 +1,6 @@
 # 🗄️ Database Schema Reference
 
-> **최종 업데이트:** 2025-10-20 01:31:00 (일요일 오전 1시 31분)  
+> **최종 업데이트:** 2025-11-05 22:00 (수요일 밤 10시) - Phase 2 완료 + PROGRAM_SEQUENCE 테이블 추가!  
 > **목적:** 모든 테이블 구조와 관계를 한눈에 파악  
 > **⭐ 중요:** 실제 코드 기준으로 작성됨
 
@@ -12,6 +12,7 @@
 |---------|------|-----------|-----------|
 | PLC_MASTER | PLC 마스터 정보 | plc_models.py | PLC 기본 정보 + 현재 매핑 상태 |
 | PROGRAMS | 프로그램 마스터 | program_models.py | 프로그램 기본 정보 |
+| **PROGRAM_SEQUENCE** ⭐ NEW | 프로그램 ID 시퀀스 | sequence_models.py | PGM_ID 자동 생성 |
 | PGM_MAPPING_HISTORY | 매핑 변경 이력 | mapping_models.py | 모든 매핑 변경 감사 추적 |
 | DOCUMENTS | 문서 정보 | shared_core/models.py ⭐ | 업로드된 파일 메타데이터 (ZIP 포함) |
 | USERS | 사용자 정보 | user_models.py | 사용자 계정 |
@@ -113,7 +114,123 @@ class Program(Base):
 
 ---
 
-## 3️⃣ PGM_MAPPING_HISTORY
+## 3️⃣ PROGRAM_SEQUENCE ⭐ NEW (2025-11-05 Phase 1)
+
+### 테이블 정의
+```sql
+CREATE TABLE PROGRAM_SEQUENCE (
+    ID INT PRIMARY KEY DEFAULT 1,
+    LAST_NUMBER INT NOT NULL DEFAULT 0,
+    UPDATE_DT DATETIME DEFAULT NOW() ON UPDATE NOW(),
+    CONSTRAINT chk_single_row CHECK (ID = 1)
+) ENGINE=InnoDB;
+
+-- 초기 데이터
+INSERT INTO PROGRAM_SEQUENCE (ID, LAST_NUMBER) VALUES (1, 0);
+```
+
+### SQLAlchemy 모델 (sequence_models.py)
+```python
+from sqlalchemy import Column, Integer, DateTime, CheckConstraint
+from sqlalchemy.sql import func
+from ai_backend.database.base import Base
+
+class ProgramSequence(Base):
+    """프로그램 ID 시퀀스 관리 테이블"""
+    __tablename__ = 'PROGRAM_SEQUENCE'
+    
+    id = Column('ID', Integer, primary_key=True, default=1)
+    last_number = Column('LAST_NUMBER', Integer, nullable=False, default=0)
+    update_dt = Column('UPDATE_DT', DateTime, default=func.now(), onupdate=func.now())
+    
+    __table_args__ = (
+        CheckConstraint('ID = 1', name='chk_single_row'),
+    )
+```
+
+### 컬럼 설명
+| 컬럼명 | 타입 | NULL | 설명 | 예시 |
+|--------|------|------|------|------|
+| ID | INT | NOT NULL | 시퀀스 ID (PK, 항상 1) | 1 |
+| LAST_NUMBER | INT | NOT NULL | 마지막 생성된 번호 | 0, 1, 2, 3... |
+| UPDATE_DT | DATETIME | NULL | 마지막 업데이트 시간 | 2025-11-05 14:30:00 |
+
+### 특징
+```
+✅ 단일 행 테이블: CHECK 제약 조건으로 ID는 항상 1만 허용
+✅ 트랜잭션 안전: Row Lock으로 동시성 제어
+✅ 자동 생성: PGM_1, PGM_2, PGM_3 형식으로 ID 생성
+✅ 시퀀스 관리: LAST_NUMBER 필드로 다음 번호 추적
+```
+
+### 사용 예시
+```sql
+-- 현재 시퀀스 번호 조회
+SELECT LAST_NUMBER FROM PROGRAM_SEQUENCE WHERE ID = 1;
+-- 결과: 3 (다음 생성될 ID는 PGM_4)
+
+-- 다음 프로그램 ID 생성 (CRUD/Service에서 자동 처리)
+UPDATE PROGRAM_SEQUENCE 
+SET LAST_NUMBER = LAST_NUMBER + 1 
+WHERE ID = 1;
+-- LAST_NUMBER: 3 → 4
+
+-- 생성된 PGM_ID: "PGM_4"
+```
+
+### 샘플 데이터
+```sql
+-- 초기 상태
+INSERT INTO PROGRAM_SEQUENCE (ID, LAST_NUMBER) 
+VALUES (1, 0);
+
+-- 3개의 프로그램 생성 후
+UPDATE PROGRAM_SEQUENCE 
+SET LAST_NUMBER = 3 
+WHERE ID = 1;
+
+-- 결과
+SELECT * FROM PROGRAM_SEQUENCE;
+┌────┬─────────────┬─────────────────────┐
+│ ID │ LAST_NUMBER │ UPDATE_DT           │
+├────┼─────────────┼─────────────────────┤
+│ 1  │ 3           │ 2025-11-05 14:30:00 │
+└────┴─────────────┴─────────────────────┘
+```
+
+### 관련 코드
+```python
+# ai_backend/database/crud/sequence_crud.py
+class SequenceCrud:
+    def generate_next_pgm_id(self) -> str:
+        """다음 프로그램 ID 생성 (트랜잭션 안전)"""
+        # Row Lock으로 동시성 제어
+        sequence = self.db.query(ProgramSequence).with_for_update().filter(
+            ProgramSequence.id == 1
+        ).first()
+        
+        if not sequence:
+            sequence = ProgramSequence(id=1, last_number=0)
+            self.db.add(sequence)
+            self.db.flush()
+        
+        # 번호 증가
+        sequence.last_number += 1
+        self.db.flush()
+        
+        # PGM_{숫자} 형식으로 반환
+        return f"PGM_{sequence.last_number}"
+```
+
+### 인덱스
+```sql
+PRIMARY KEY (ID)
+CHECK CONSTRAINT chk_single_row (ID = 1)
+```
+
+---
+
+## 4️⃣ PGM_MAPPING_HISTORY
 
 ### SQLAlchemy 모델
 ```python
@@ -142,7 +259,7 @@ class PgmMappingHistory(Base):
 
 ---
 
-## 4️⃣ DOCUMENTS ⭐ (shared_core, 2025-11-05 업데이트)
+## 5️⃣ DOCUMENTS ⭐ (shared_core, 2025-11-05 업데이트)
 
 ### 테이블 정의
 ```sql
@@ -354,7 +471,7 @@ INSERT INTO DOCUMENTS VALUES (
 
 ---
 
-## 5️⃣ PGM_TEMPLATE ⭐ NEW (2025-10-19)
+## 6️⃣ PGM_TEMPLATE ⭐ NEW (2025-10-19)
 
 ### 테이블 정의
 ```sql
@@ -470,6 +587,8 @@ USERS ────┐
           ├─── PLC_MASTER (CREATE_USER, UPDATE_USER) ⭐
           │         │
           │         ├─── PROGRAMS (PGM_ID)
+          │         │        │
+          │         │        └─── PROGRAM_SEQUENCE ⭐ (PGM_ID 자동 생성)
           │         │
           │         └─── PGM_MAPPING_HISTORY (PLC_ID)
           │
@@ -514,11 +633,50 @@ USERS ────┐
    → data: [Plant[Process[Line[EquipmentGroup[UnitData[]]]]]]
 ```
 
+### ⭐ NEW: 프로그램 업로드 시나리오 (2025-11-05 Phase 2)
+```
+1. POST /programs/upload 요청
+   - pgm_name, ladder_zip, template_xlsx
+
+2. 0단계: PGM_ID 자동 생성
+   → SequenceService.generate_pgm_id()
+   → PROGRAM_SEQUENCE 테이블 업데이트
+   SELECT * FROM PROGRAM_SEQUENCE WHERE ID = 1 FOR UPDATE;
+   UPDATE PROGRAM_SEQUENCE SET LAST_NUMBER = LAST_NUMBER + 1 WHERE ID = 1;
+   → 결과: "PGM_1", "PGM_2", "PGM_3" 형식
+
+3. 1-2단계: 파일 검증
+   - 템플릿에서 Logic ID 추출 → 필수 파일 목록 생성
+   - ZIP에서 파일 목록 추출
+   - 비교 → 누락/불필요 파일 확인
+
+4. 3-4단계: 파일 저장
+   - DOCUMENTS 테이블 등록 (자동)
+   - PGM_TEMPLATE 테이블 파싱/저장 (자동)
+
+5. 5단계: 프로그램 생성
+   - PROGRAMS 테이블 등록
+   - ⭐ PGM_ID는 0단계에서 생성된 ID 사용
+
+6. 트랜잭션 커밋
+   - 모든 단계 성공 → 커밋
+   - 실패 시 → 롤백 + 파일 삭제
+```
+
 ---
 
-## 📝 중요 변경사항 (2025-10-17)
+## 📝 중요 변경사항
 
-### ⭐ PLC_MASTER 테이블 구조 확인
+### ⭐ 2025-11-05 Phase 2 완료
+```diff
++ PROGRAM_SEQUENCE 테이블 추가
++ PGM_ID 서버 자동 생성 (PGM_1, PGM_2 형식)
++ 시퀀스 기반 ID 생성으로 중복 방지
++ Row Lock으로 동시성 제어
++ PROGRAMS 테이블 단순화 (DOCUMENT_ID 등 외래키 제거)
+```
+
+### ⭐ 2025-10-17 PLC_MASTER 테이블 구조 확인
 ```diff
 ✅ 실제 코드 확인 결과:
 + CREATE_USER VARCHAR(50)  # 실제 존재 (plc_models.py)
@@ -539,4 +697,4 @@ USERS ────┐
 ---
 
 **이 문서는 실제 코드를 기준으로 작성되었습니다!** 📚  
-**파일 위치:** `D:\project-template\chat-api\app\backend\ai_backend\database\models\plc_models.py`
+**파일 위치:** `D:\project-template\chat-api\app\backend\ai_backend\database\models\*`
