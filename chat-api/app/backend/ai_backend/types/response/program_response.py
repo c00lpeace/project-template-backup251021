@@ -2,7 +2,7 @@
 """Program response models."""
 
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime
 
 __all__ = [
@@ -12,6 +12,9 @@ __all__ = [
     "PgmMappingResponse",
     "PgmMappingDetailResponse",
     "PgmMappingListResponse",
+    "ValidationResult",
+    "SavedFileInfo",
+    "ProgramUploadResponse",
 ]
 
 
@@ -91,3 +94,55 @@ class PgmMappingListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class ValidationResult(BaseModel):
+    """파일 검증 결과"""
+    required_files: List[str] = Field(description="템플릿에 명시된 필수 파일")
+    zip_files: List[str] = Field(description="ZIP 내부 파일 목록")
+    matched_files: List[str] = Field(description="일치하는 파일")
+    missing_files: List[str] = Field(description="누락된 파일")
+    extra_files: List[str] = Field(description="불필요한 파일")
+    validation_passed: bool = Field(description="검증 통과 여부")
+
+
+class SavedFileInfo(BaseModel):
+    """저장된 파일 정보"""
+    document_id: str
+    document_name: str
+    file_type: str
+    file_size: int
+    upload_path: str
+
+
+class ProgramUploadResponse(BaseModel):
+    """프로그램 업로드 응답"""
+    
+    # ⭐ 생성된 프로그램 정보
+    pgm_id: str = Field(description="서버에서 자동 생성된 프로그램 ID (예: PGM_1, PGM_2)")
+    pgm_name: str
+    pgm_version: Optional[str]
+    description: Optional[str]
+    create_user: str
+    create_dt: datetime
+    
+    # 검증 결과
+    validation_result: ValidationResult
+    
+    # 저장된 파일들
+    saved_files: Dict = Field(description="저장된 파일 정보")
+    
+    # 통계
+    summary: Dict = Field(
+        description="업로드 통계",
+        example={
+            'total_ladder_files': 10,
+            'template_parsed': True,
+            'template_row_count': 10
+        }
+    )
+    
+    message: str = Field(default="프로그램이 성공적으로 생성되었습니다")
+    
+    class Config:
+        from_attributes = True

@@ -9,6 +9,9 @@ from .models.group_models import *
 from .models.pgm_mapping_models import *
 from .models.plc_models import *
 from .models.program_models import *
+from .models.pgm_mapping_models import *
+from .models.template_models import *
+from .models.sequence_models import *
 
 # 모든 모델을 import하여 Base에 등록
 from .models.user_models import *
@@ -25,5 +28,7 @@ __all__ = [
     "PLCMaster",
     "Program",
     "PgmMappingHistory",
-    "PgmMappingAction"
+    "PgmMappingAction",
+    "PgmTemplate",
+    "ProgramSequence",
 ]

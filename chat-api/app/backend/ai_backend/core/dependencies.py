@@ -12,6 +12,8 @@ from ai_backend.api.services.plc_service import PlcService
 from ai_backend.api.services.program_service import ProgramService
 from ai_backend.api.services.pgm_history_service import PgmHistoryService
 from ai_backend.api.services.template_service import TemplateService
+from ai_backend.api.services.sequence_service import SequenceService
+from ai_backend.api.services.program_upload_service import ProgramUploadService
 from ai_backend.database.base import Database
 from ai_backend.config import settings
 from ai_backend.cache.redis_client import get_redis_client
@@ -146,3 +148,27 @@ def get_template_service(
 ) -> TemplateService:
     """템플릿 서비스 의존성 주입"""
     return TemplateService(db=db)
+
+
+def get_sequence_service(
+    db: Session = Depends(get_db)
+) -> SequenceService:
+    """시퀀스 서비스 의존성 주입"""
+    return SequenceService(db=db)
+
+
+def get_program_upload_service(
+    db: Session = Depends(get_db),
+    sequence_service: SequenceService = Depends(get_sequence_service),
+    document_service: DocumentService = Depends(get_document_service),
+    template_service: TemplateService = Depends(get_template_service),
+    program_service: ProgramService = Depends(get_program_service)
+) -> ProgramUploadService:
+    """프로그램 업로드 서비스 의존성 주입"""
+    return ProgramUploadService(
+        db=db,
+        sequence_service=sequence_service,
+        document_service=document_service,
+        template_service=template_service,
+        program_service=program_service
+    )

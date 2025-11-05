@@ -9,6 +9,7 @@ __all__ = [
     "ProgramUpdateRequest",
     "PgmMappingCreateRequest",
     "PgmMappingUpsertRequest",
+    "ProgramUploadMetadata",
 ]
 
 
@@ -46,3 +47,12 @@ class PgmMappingUpsertRequest(BaseModel):
     pgm_id: str = Field(..., max_length=50, description="프로그램 ID")
     notes: Optional[str] = Field(None, max_length=500, description="비고")
     user: Optional[str] = Field(None, max_length=50, description="사용자")
+
+
+class ProgramUploadMetadata(BaseModel):
+    """프로그램 업로드 메타데이터 (⭐ PGM_ID는 서버에서 자동 생성)"""
+    pgm_name: str = Field(..., max_length=200, description="프로그램 명칭")
+    pgm_version: Optional[str] = Field(None, max_length=20, description="프로그램 버전")
+    description: Optional[str] = Field(None, max_length=1000, description="프로그램 설명")
+    create_user: str = Field(..., max_length=50, description="생성자")
+    notes: Optional[str] = Field(None, max_length=1000, description="비고")

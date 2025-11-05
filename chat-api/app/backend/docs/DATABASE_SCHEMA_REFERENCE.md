@@ -13,11 +13,14 @@
 | PLC_MASTER | PLC 마스터 정보 | plc_models.py | PLC 기본 정보 + 현재 매핑 상태 |
 | PROGRAMS | 프로그램 마스터 | program_models.py | 프로그램 기본 정보 |
 | PGM_MAPPING_HISTORY | 매핑 변경 이력 | mapping_models.py | 모든 매핑 변경 감사 추적 |
-| DOCUMENTS | 문서 정보 | document_models.py | 업로드된 파일 메타데이터 |
+| DOCUMENTS | 문서 정보 | shared_core/models.py ⭐ | 업로드된 파일 메타데이터 (ZIP 포함) |
 | USERS | 사용자 정보 | user_models.py | 사용자 계정 |
 | GROUPS | 그룹 정보 | group_models.py | 사용자 그룹 |
 | GROUP_USERS | 그룹-사용자 매핑 | group_models.py | N:M 관계 |
 | CHAT_HISTORY | 채팅 이력 | chat_models.py | LLM 대화 기록 |
+| PGM_TEMPLATE | 프로그램 템플릿 | template_models.py | 프로그램 구조 템플릿 |
+| DOCUMENT_CHUNKS | 문서 청크 | shared_core/models.py ⭐ | 문서 분할 데이터 |
+| PROCESSING_JOBS | 처리 작업 | shared_core/models.py ⭐ | 문서 처리 작업 추적 |
 
 ---
 
@@ -139,7 +142,219 @@ class PgmMappingHistory(Base):
 
 ---
 
-## 4️⃣ PGM_TEMPLATE ⭐ NEW (2025-10-19)
+## 4️⃣ DOCUMENTS ⭐ (shared_core, 2025-11-05 업데이트)
+
+### 테이블 정의
+```sql
+CREATE TABLE DOCUMENTS (
+    DOCUMENT_ID VARCHAR(50) PRIMARY KEY,
+    
+    -- 기본 정보
+    DOCUMENT_NAME VARCHAR(255) NOT NULL,        -- 파일명 ⭐
+    ORIGINAL_FILENAME VARCHAR(255) NOT NULL,    -- 원본 파일명 ⭐
+    
+    -- 파일 정보
+    FILE_KEY VARCHAR(255) NOT NULL,             -- 파일 키 ⭐
+    FILE_SIZE INT NOT NULL,
+    FILE_TYPE VARCHAR(100) NOT NULL,            -- MIME 타입 ⭐
+    FILE_EXTENSION VARCHAR(10) NOT NULL,
+    UPLOAD_PATH VARCHAR(500) NOT NULL,          -- 저장 경로 ⭐
+    FILE_HASH VARCHAR(64),                      -- 해시값 (중복 방지)
+    
+    -- 사용자 정보
+    USER_ID VARCHAR(50) NOT NULL,
+    IS_PUBLIC BOOLEAN NOT NULL DEFAULT FALSE,
+    
+    -- 문서 타입
+    DOCUMENT_TYPE VARCHAR(20) DEFAULT 'common', -- ⭐ 'PGM_LADDER_CSV', 'PGM_LADDER_ZIP' 등
+    
+    -- 프로그램 연결
+    PGM_ID VARCHAR(50),                         -- ⭐ ZIP 업로드 시 사용
+    
+    -- 처리 상태
+    STATUS VARCHAR(20) NOT NULL DEFAULT 'processing',
+    TOTAL_PAGES INT DEFAULT 0,
+    PROCESSED_PAGES INT DEFAULT 0,
+    ERROR_MESSAGE TEXT,
+    
+    -- 벡터화 정보
+    MILVUS_COLLECTION_NAME VARCHAR(255),
+    VECTOR_COUNT INT DEFAULT 0,
+    
+    -- 문서 메타데이터
+    LANGUAGE VARCHAR(10),
+    AUTHOR VARCHAR(255),
+    SUBJECT VARCHAR(500),
+    
+    -- JSON 필드
+    METADATA_JSON JSON,                         -- ⭐ 추가 메타데이터
+    PROCESSING_CONFIG JSON,
+    PERMISSIONS JSON,                           -- 권한 리스트
+    
+    -- 시간 정보
+    CREATE_DT DATETIME NOT NULL DEFAULT NOW(),
+    UPDATED_AT DATETIME,
+    PROCESSED_AT DATETIME,
+    
+    -- 삭제 플래그
+    IS_DELETED BOOLEAN NOT NULL DEFAULT FALSE,
+    
+    -- 인덱스
+    INDEX idx_user_id (USER_ID),
+    INDEX idx_pgm_id (PGM_ID),
+    INDEX idx_document_type (DOCUMENT_TYPE),
+    INDEX idx_file_hash (FILE_HASH)
+);
+```
+
+### SQLAlchemy 모델 (shared_core/models.py)
+```python
+class Document(Base):
+    __tablename__ = "DOCUMENTS"
+    
+    # 기본 정보
+    document_id = Column('DOCUMENT_ID', String(50), primary_key=True)
+    document_name = Column('DOCUMENT_NAME', String(255), nullable=False)
+    original_filename = Column('ORIGINAL_FILENAME', String(255), nullable=False)
+    
+    # 파일 정보
+    file_key = Column('FILE_KEY', String(255), nullable=False)
+    file_size = Column('FILE_SIZE', Integer, nullable=False)
+    file_type = Column('FILE_TYPE', String(100), nullable=False)
+    file_extension = Column('FILE_EXTENSION', String(10), nullable=False)
+    upload_path = Column('UPLOAD_PATH', String(500), nullable=False)
+    file_hash = Column('FILE_HASH', String(64), nullable=True)
+    
+    # 사용자 정보
+    user_id = Column('USER_ID', String(50), nullable=False)
+    is_public = Column('IS_PUBLIC', Boolean, nullable=False, server_default=false())
+    
+    # 문서 타입
+    document_type = Column('DOCUMENT_TYPE', String(20), nullable=True, default='common')
+    
+    # 프로그램 연결
+    pgm_id = Column('PGM_ID', String(50), nullable=True, index=True)
+    
+    # 처리 상태
+    status = Column('STATUS', String(20), nullable=False, server_default='processing')
+    total_pages = Column('TOTAL_PAGES', Integer, default=0, nullable=True)
+    processed_pages = Column('PROCESSED_PAGES', Integer, default=0, nullable=True)
+    error_message = Column('ERROR_MESSAGE', Text, nullable=True)
+    
+    # 벡터화 정보
+    milvus_collection_name = Column('MILVUS_COLLECTION_NAME', String(255), nullable=True)
+    vector_count = Column('VECTOR_COUNT', Integer, default=0, nullable=True)
+    
+    # 문서 메타데이터
+    language = Column('LANGUAGE', String(10), nullable=True)
+    author = Column('AUTHOR', String(255), nullable=True)
+    subject = Column('SUBJECT', String(500), nullable=True)
+    
+    # JSON 필드
+    metadata_json = Column('METADATA_JSON', JSON, nullable=True)
+    processing_config = Column('PROCESSING_CONFIG', JSON, nullable=True)
+    permissions = Column('PERMISSIONS', JSON, nullable=True)
+    
+    # 시간 정보
+    create_dt = Column('CREATE_DT', DateTime, nullable=False, server_default=func.now())
+    updated_at = Column('UPDATED_AT', DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=True)
+    processed_at = Column('PROCESSED_AT', DateTime, nullable=True)
+    
+    # 삭제 플래그
+    is_deleted = Column('IS_DELETED', Boolean, nullable=False, server_default=false())
+```
+
+### 컴럼 설명
+| 컴럼명 | 타입 | NULL | 설명 | 예시 |
+|--------|------|------|------|------|
+| DOCUMENT_ID | VARCHAR(50) | NOT NULL | 문서 ID (PK) | "doc_20251105_143022_a1b2c3d4" |
+| DOCUMENT_NAME ⭐ | VARCHAR(255) | NOT NULL | 파일명 | "file.txt" |
+| ORIGINAL_FILENAME ⭐ | VARCHAR(255) | NOT NULL | 원본 파일명 | "file.txt" |
+| FILE_KEY ⭐ | VARCHAR(255) | NOT NULL | 파일 키 | "PGM001/folder/file.txt" |
+| FILE_SIZE | INT | NOT NULL | 파일 크기 (바이트) | 1024 |
+| FILE_TYPE ⭐ | VARCHAR(100) | NOT NULL | MIME 타입 | "text/csv" |
+| FILE_EXTENSION | VARCHAR(10) | NOT NULL | 확장자 | "csv" |
+| UPLOAD_PATH ⭐ | VARCHAR(500) | NOT NULL | 저장 경로 | "/uploads/PGM001/folder/file.txt" |
+| FILE_HASH | VARCHAR(64) | NULL | MD5 해시 | "a1b2c3d4e5f6..." |
+| USER_ID | VARCHAR(50) | NOT NULL | 사용자 ID | "admin" |
+| IS_PUBLIC | BOOLEAN | NOT NULL | 공개 여부 | FALSE |
+| DOCUMENT_TYPE ⭐ | VARCHAR(20) | NULL | 문서 타입 | "PGM_LADDER_CSV" |
+| PGM_ID ⭐ | VARCHAR(50) | NULL | 프로그램 ID | "PGM001" |
+| STATUS | VARCHAR(20) | NOT NULL | 처리 상태 | "completed" |
+| METADATA_JSON ⭐ | JSON | NULL | 추가 메타데이터 | {"extracted_from_zip": true} |
+| CREATE_DT | DATETIME | NOT NULL | 생성일시 | 2025-11-05 14:30:00 |
+| IS_DELETED | BOOLEAN | NOT NULL | 삭제 플래그 | FALSE |
+
+### 유효한 document_type 목록
+```python
+TYPE_COMMON = 'common'
+TYPE_TYPE1 = 'type1'
+TYPE_TYPE2 = 'type2'
+TYPE_ZIP = 'zip'
+TYPE_PGM_TEMPLATE = 'pgm_template'
+TYPE_PGM_LADDER_CSV = 'PGM_LADDER_CSV'    # ⭐ ZIP 추출 파일
+TYPE_PGM_LADDER_ZIP = 'PGM_LADDER_ZIP'    # ⭐ 원본 ZIP 파일
+```
+
+### ZIP 업로드 시 데이터 예시
+```sql
+-- 원본 ZIP 파일
+INSERT INTO DOCUMENTS VALUES (
+    'doc_20251105_143022_a1b2c3d4',  -- document_id
+    'archive.zip',                    -- document_name
+    'archive.zip',                    -- original_filename
+    'PGM001/zip/archive.zip',        -- file_key
+    1048576,                          -- file_size (1MB)
+    'application/zip',                -- file_type
+    'zip',                            -- file_extension
+    '/uploads/PGM001/zip/archive.zip', -- upload_path
+    'a1b2c3d4e5f6...',               -- file_hash
+    'admin',                          -- user_id
+    FALSE,                            -- is_public
+    'PGM_LADDER_ZIP',                -- document_type ⭐
+    'PGM001',                        -- pgm_id ⭐
+    'completed',                      -- status
+    '{"is_original_zip": true}',     -- metadata_json ⭐
+    NOW(),                           -- create_dt
+    FALSE                            -- is_deleted
+);
+
+-- ZIP에서 추출한 파일
+INSERT INTO DOCUMENTS VALUES (
+    'doc_20251105_143023_b2c3d4e5',
+    'file.txt',
+    'file.txt',
+    'PGM001/folder/file.txt',
+    2048,
+    'text/plain',
+    'txt',
+    '/uploads/PGM001/folder/file.txt',
+    'b2c3d4e5f6g7...',
+    'admin',
+    FALSE,
+    'PGM_LADDER_CSV',                -- document_type ⭐
+    'PGM001',                        -- pgm_id ⭐
+    'completed',
+    '{"extracted_from_zip": true, "original_zip_path": "folder/file.txt"}', -- metadata_json ⭐
+    NOW(),
+    FALSE
+);
+```
+
+### 주요 차이점 (2025-11-05 업데이트)
+```
+✅ 필드명 표준화: file_name → document_name, file_path → upload_path
+✅ 신규 필드: original_filename, file_key, file_type
+✅ document_type 고정값: PGM_LADDER_CSV, PGM_LADDER_ZIP
+✅ pgm_id 필드로 ZIP 업로드 관리
+✅ metadata_json에 ZIP 관련 정보 저장
+```
+
+**상세 문서:** `docs/ZIP_UPLOAD_CHANGES_20251105.md` 참조
+
+---
+
+## 5️⃣ PGM_TEMPLATE ⭐ NEW (2025-10-19)
 
 ### 테이블 정의
 ```sql

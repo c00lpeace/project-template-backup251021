@@ -11,9 +11,10 @@ logger = logging.getLogger(__name__)
 
 class TemplateCrud:
     """PGM Template CRUD operations"""
+    def __init__(self, db: Session):
+        self.db = db
     
-    @staticmethod
-    def bulk_create(db: Session, templates: List[Dict]) -> List[PgmTemplate]:
+    def bulk_create(self, templates: List[Dict]) -> List[PgmTemplate]:
         """템플릿 일괄 생성
         
         Args:
@@ -25,18 +26,18 @@ class TemplateCrud:
         """
         try:
             db_templates = [PgmTemplate(**data) for data in templates]
-            db.add_all(db_templates)
-            db.commit()
+            self.db.add_all(db_templates)
+            self.db.commit()
             logger.info(f"템플릿 {len(db_templates)}개 생성 완료")
             return db_templates
         except Exception as e:
-            db.rollback()
+            self.db.rollback()
             logger.error(f"템플릿 일괄 생성 실패: {e}")
             raise e
     
-    @staticmethod
+    
     def get_templates_by_pgm(
-        db: Session, 
+        self, 
         pgm_id: str
     ) -> List[PgmTemplate]:
         """프로그램별 템플릿 조회
@@ -48,7 +49,7 @@ class TemplateCrud:
         Returns:
             PgmTemplate 객체 리스트 (정렬됨)
         """
-        return db.query(PgmTemplate)\
+        return self.db.query(PgmTemplate)\
                  .filter(PgmTemplate.pgm_id == pgm_id)\
                  .order_by(
                      PgmTemplate.folder_id,
@@ -57,9 +58,9 @@ class TemplateCrud:
                  )\
                  .all()
     
-    @staticmethod
+    
     def get_templates_by_document(
-        db: Session,
+        self,
         document_id: str
     ) -> List[PgmTemplate]:
         """문서별 템플릿 조회
@@ -71,7 +72,7 @@ class TemplateCrud:
         Returns:
             PgmTemplate 객체 리스트
         """
-        return db.query(PgmTemplate)\
+        return self.db.query(PgmTemplate)\
                  .filter(PgmTemplate.document_id == document_id)\
                  .order_by(
                      PgmTemplate.folder_id,
@@ -80,9 +81,9 @@ class TemplateCrud:
                  )\
                  .all()
     
-    @staticmethod
+    
     def get_template_by_id(
-        db: Session,
+        self,
         template_id: int
     ) -> Optional[PgmTemplate]:
         """템플릿 ID로 조회
@@ -94,12 +95,12 @@ class TemplateCrud:
         Returns:
             PgmTemplate 객체 또는 None
         """
-        return db.query(PgmTemplate)\
+        return self.db.query(PgmTemplate)\
                  .filter(PgmTemplate.template_id == template_id)\
                  .first()
     
-    @staticmethod
-    def delete_by_pgm_id(db: Session, pgm_id: str) -> int:
+    
+    def delete_by_pgm_id(self, pgm_id: str) -> int:
         """프로그램별 템플릿 삭제
         
         Args:
@@ -110,19 +111,19 @@ class TemplateCrud:
             삭제된 행 수
         """
         try:
-            deleted = db.query(PgmTemplate)\
+            deleted = self.db.query(PgmTemplate)\
                         .filter(PgmTemplate.pgm_id == pgm_id)\
                         .delete()
-            db.commit()
+            self.db.commit()
             logger.info(f"프로그램 {pgm_id}의 템플릿 {deleted}개 삭제 완료")
             return deleted
         except Exception as e:
-            db.rollback()
+            self.db.rollback()
             logger.error(f"템플릿 삭제 실패: {e}")
             raise e
     
-    @staticmethod
-    def delete_by_document_id(db: Session, document_id: str) -> int:
+    
+    def delete_by_document_id(self, document_id: str) -> int:
         """문서별 템플릿 삭제
         
         Args:
@@ -133,19 +134,19 @@ class TemplateCrud:
             삭제된 행 수
         """
         try:
-            deleted = db.query(PgmTemplate)\
+            deleted = self.db.query(PgmTemplate)\
                         .filter(PgmTemplate.document_id == document_id)\
                         .delete()
-            db.commit()
+            self.db.commit()
             logger.info(f"문서 {document_id}의 템플릿 {deleted}개 삭제 완료")
             return deleted
         except Exception as e:
-            db.rollback()
+            self.db.rollback()
             logger.error(f"템플릿 삭제 실패: {e}")
             raise e
     
-    @staticmethod
-    def get_template_count_by_pgm(db: Session, pgm_id: str) -> int:
+    
+    def get_template_count_by_pgm(self, pgm_id: str) -> int:
         """프로그램별 템플릿 개수 조회
         
         Args:
@@ -155,11 +156,11 @@ class TemplateCrud:
         Returns:
             템플릿 개수
         """
-        return db.query(func.count(PgmTemplate.template_id))\
+        return self.db.query(func.count(PgmTemplate.template_id))\
                  .filter(PgmTemplate.pgm_id == pgm_id)\
                  .scalar()
     
-    @staticmethod
+    
     def get_all_pgm_ids(db: Session) -> List[str]:
         """모든 프로그램 ID 목록 조회
         
@@ -169,15 +170,15 @@ class TemplateCrud:
         Returns:
             프로그램 ID 리스트 (중복 제거)
         """
-        result = db.query(PgmTemplate.pgm_id)\
+        result = self.db.query(PgmTemplate.pgm_id)\
                    .distinct()\
                    .order_by(PgmTemplate.pgm_id)\
                    .all()
         return [row[0] for row in result]
     
-    @staticmethod
+    
     def search_templates(
-        db: Session,
+        self,
         pgm_id: Optional[str] = None,
         folder_id: Optional[str] = None,
         logic_name: Optional[str] = None,
@@ -197,7 +198,7 @@ class TemplateCrud:
         Returns:
             PgmTemplate 객체 리스트
         """
-        query = db.query(PgmTemplate)
+        query = self.db.query(PgmTemplate)
         
         if pgm_id:
             query = query.filter(PgmTemplate.pgm_id == pgm_id)

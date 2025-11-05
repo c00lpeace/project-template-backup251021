@@ -17,6 +17,8 @@ from shared_core import Document
 from shared_core import DocumentService as BaseDocumentService
 from shared_core import ProcessingJobService
 
+from ai_backend.api.services.template_service import TemplateService
+
 logger = logging.getLogger(__name__)
 
 
@@ -27,7 +29,8 @@ class DocumentService(BaseDocumentService):
         # 환경변수에서 업로드 경로 가져오기 (k8s 환경 대응)
         upload_path = upload_base_path or settings.upload_base_path
         super().__init__(db, upload_path)
-        self.program_crud = ProgramCrud(db)        
+        self.program_crud = ProgramCrud(db)
+        self.template_service = TemplateService(db)
 
     def upload_document(
         self,
@@ -70,7 +73,7 @@ class DocumentService(BaseDocumentService):
             # 공통 모듈의 create_document_from_file 사용
             result = self.create_document_from_file(
                 file_content=file_content,
-                filename=original_filename,
+                filename=str(original_filename),
                 user_id=user_id,
                 is_public=is_public,
                 permissions=permissions,
@@ -81,9 +84,6 @@ class DocumentService(BaseDocumentService):
             # ⭐ NEW: document_type이 "pgm_template"이면 Excel 파싱
             if document_type == "pgm_template":
                 try:
-                    from ai_backend.api.services.template_service import TemplateService
-                    template_service = TemplateService(self.db)
-                    
                     # metadata에서 pgm_id 추출
                     metadata = result.get('metadata_json') or {}
                     pgm_id = metadata.get('pgm_id')
@@ -98,7 +98,7 @@ class DocumentService(BaseDocumentService):
                             logger.error(f"file_path를 찾을 수 없음: result keys = {list(result.keys())}")
                             raise ValueError("file_path를 result에서 찾을 수 없습니다")
                         
-                        parse_result = template_service.parse_and_save(
+                        parse_result = self.template_service.parse_and_save(
                             document_id=result['document_id'],
                             file_path=file_path,
                             pgm_id=pgm_id,

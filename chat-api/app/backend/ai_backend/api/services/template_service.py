@@ -21,6 +21,8 @@ class TemplateService:
     
     def __init__(self, db: Session):
         self.db = db
+        self.template_crud = TemplateCrud(db)
+        self.program_crud = ProgramCrud(db)
     
     def parse_and_save(
         self,
@@ -42,13 +44,12 @@ class TemplateService:
         """
         logger.info(f"템플릿 파싱 시작: pgm_id={pgm_id}, document_id={document_id}")
         
-        # 1. PGM_ID 존재 여부 확인 (대소문자 문제)
-        program = ProgramCrud.get_program_by_id(self.db, pgm_id) 
-        if not program:
+        # 1. 프로그램 ID 중복 체크
+        existing = self.program_crud.get_program_by_id(pgm_id)
+        if existing:
             raise HandledException(
-                ResponseCode.PROGRAM_NOT_FOUND,
-                msg=f"프로그램을 찾을 수 없습니다: {pgm_id}",
-                http_status_code=404
+                ResponseCode.PROGRAM_ALREADY_EXISTS,
+                msg=f"프로그램 ID '{pgm_id}'가 이미 존재합니다"
             )
         
         # 2. Excel 파일 읽기
@@ -79,11 +80,11 @@ class TemplateService:
         skipped_rows = 0
         
         for idx, row in df.iterrows():
-            # PGM ID 필터링 (엑셀에 여러 프로그램이 있을 수 있음)
-            row_pgm_id = str(row['PGM ID']).strip()
-            if row_pgm_id != pgm_id:
-                skipped_rows += 1
-                continue
+            # # PGM ID 필터링 (엑셀에 여러 프로그램이 있을 수 있음)
+            # row_pgm_id = str(row['PGM ID']).strip()
+            # if row_pgm_id != pgm_id:
+            #     skipped_rows += 1
+            #     continue
             
             # 빈 행 스킵
             if pd.isna(row['Logic ID']) or pd.isna(row['Logic Name']):
@@ -110,11 +111,11 @@ class TemplateService:
         logger.info(f"데이터 변환 완료: {len(templates)}개 (스킵: {skipped_rows}개)")
         
         # 5. 기존 템플릿 삭제 (덮어쓰기)
-        deleted_count = TemplateCrud.delete_by_pgm_id(self.db, pgm_id)
+        deleted_count = self.template_crud.delete_by_pgm_id(pgm_id)
         logger.info(f"기존 템플릿 삭제: {deleted_count}개")
         
         # 6. Bulk Insert
-        created = TemplateCrud.bulk_create(self.db, templates)
+        created = self.template_crud.bulk_create(templates)
         logger.info(f"새 템플릿 생성: {len(created)}개")
         
         result = {
@@ -141,7 +142,7 @@ class TemplateService:
         logger.info(f"템플릿 트리 조회: pgm_id={pgm_id}")
         
         # 1. 템플릿 조회
-        templates = TemplateCrud.get_templates_by_pgm(self.db, pgm_id)
+        templates = self.template_crud.get_templates_by_pgm(pgm_id)
         
         if not templates:
             raise HandledException(
@@ -257,8 +258,7 @@ class TemplateService:
         """
         skip = (page - 1) * page_size
         
-        templates = TemplateCrud.search_templates(
-            self.db,
+        templates = self.template_crud.search_templates(
             pgm_id=pgm_id,
             folder_id=folder_id,
             logic_name=logic_name,
@@ -268,7 +268,7 @@ class TemplateService:
         
         # 전체 개수 조회 (필터링 적용)
         if pgm_id:
-            total_count = TemplateCrud.get_template_count_by_pgm(self.db, pgm_id)
+            total_count = self.template_crud.get_template_count_by_pgm(pgm_id)
         else:
             # 전체 개수 (필터 없을 때)
             from sqlalchemy import func
@@ -295,7 +295,7 @@ class TemplateService:
         """
         logger.info(f"템플릿 삭제 시작: pgm_id={pgm_id}")
         
-        deleted_count = TemplateCrud.delete_by_pgm_id(self.db, pgm_id)
+        deleted_count = self.template_crud.delete_by_pgm_id(pgm_id)
         
         if deleted_count == 0:
             raise HandledException(
@@ -317,11 +317,11 @@ class TemplateService:
         Returns:
             TemplateSummary 리스트
         """
-        pgm_ids = TemplateCrud.get_all_pgm_ids(self.db)
+        pgm_ids = self.template_crud.get_all_pgm_ids(self.db)
         
         summaries = []
         for pgm_id in pgm_ids:
-            templates = TemplateCrud.get_templates_by_pgm(self.db, pgm_id)
+            templates = self.template_crud.get_templates_by_pgm(pgm_id)
             if not templates:
                 continue
             
