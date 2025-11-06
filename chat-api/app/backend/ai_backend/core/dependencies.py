@@ -13,10 +13,11 @@ from ai_backend.api.services.program_service import ProgramService
 from ai_backend.api.services.pgm_history_service import PgmHistoryService
 from ai_backend.api.services.template_service import TemplateService
 from ai_backend.api.services.sequence_service import SequenceService
+from ai_backend.api.services.file_validation_service import FileValidationService  # Phase 4 추가
+from ai_backend.api.services.file_storage_service import FileStorageService        # Phase 4 추가
 from ai_backend.api.services.program_upload_service import ProgramUploadService
 from ai_backend.database.base import Database
 from ai_backend.config import settings
-from ai_backend.cache.redis_client import get_redis_client
 
 logger = logging.getLogger(__name__)
 
@@ -157,17 +158,52 @@ def get_sequence_service(
     return SequenceService(db=db)
 
 
+def get_file_validation_service() -> FileValidationService:
+    """
+    파일 검증 서비스 의존성 주입 (Phase 4 추가)
+    
+    Phase 1에서 생성된 FileValidationService
+    - 파일 타입/크기 검증
+    - 템플릿/ZIP 구조 검증
+    - 레더 파일 매칭 검증
+    """
+    return FileValidationService()
+
+
+def get_file_storage_service() -> FileStorageService:
+    """
+    파일 저장 서비스 의존성 주입 (Phase 4 추가)
+    
+    Phase 1에서 생성된 FileStorageService
+    - 레더 ZIP 저장 및 압축 해제
+    - 템플릿 파일 저장
+    - 파일 삭제 (롤백)
+    """
+    return FileStorageService()
+
+
 def get_program_upload_service(
     db: Session = Depends(get_db),
     sequence_service: SequenceService = Depends(get_sequence_service),
+    file_validation_service: FileValidationService = Depends(get_file_validation_service),  # Phase 4 추가
+    file_storage_service: FileStorageService = Depends(get_file_storage_service),            # Phase 4 추가
     document_service: DocumentService = Depends(get_document_service),
     template_service: TemplateService = Depends(get_template_service),
     program_service: ProgramService = Depends(get_program_service)
 ) -> ProgramUploadService:
-    """프로그램 업로드 서비스 의존성 주입"""
+    """
+    프로그램 업로드 서비스 의존성 주입 (Phase 4 업데이트)
+    
+    Phase 3 리팩토링:
+    - FileValidationService 주입
+    - FileStorageService 주입
+    - DocumentService Phase 2 메서드 사용
+    """
     return ProgramUploadService(
         db=db,
         sequence_service=sequence_service,
+        file_validation_service=file_validation_service,  # Phase 4 추가
+        file_storage_service=file_storage_service,        # Phase 4 추가
         document_service=document_service,
         template_service=template_service,
         program_service=program_service

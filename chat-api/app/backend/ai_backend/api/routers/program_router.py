@@ -138,45 +138,54 @@ def get_plcs_by_program(
     )
 
 
-# ========== ⭐ 프로그램 파일 업로드 API (Phase 2) ==========
+# ========== ⭐ 프로그램 파일 업로드 API (Phase 4 리팩토링) ==========
 
 @router.post("/programs/upload", response_model=ProgramUploadResponse, status_code=201)
 async def upload_program_files(
     pgm_name: str = Form(..., description="프로그램 명칭"),
     create_user: str = Form(..., description="생성자"),
-    ladder_zip: UploadFile = File(..., description="레더 CSV 파일들이 압축된 ZIP"),
-    template_xlsx: UploadFile = File(..., description="필수 파일 목록이 기재된 템플릿 파일"),
+    pgm_ladder_zip_file: UploadFile = File(..., description="레더 CSV 파일들이 압축된 ZIP"),  # Phase 4: 명확한 변수명
+    pgm_template_file: UploadFile = File(..., description="필수 파일 목록이 기재된 템플릿 파일"),  # Phase 4: 명확한 변수명
     pgm_version: Optional[str] = Form(None, description="프로그램 버전"),
     description: Optional[str] = Form(None, description="프로그램 설명"),
     notes: Optional[str] = Form(None, description="비고"),
     program_upload_service: ProgramUploadService = Depends(get_program_upload_service)
 ):
     """
-    PLC 프로그램 파일 업로드 및 생성
+    PLC 프로그램 파일 업로드 및 생성 (Phase 4 리팩토링)
     
     **PGM_ID는 서버에서 자동 생성** (클라이언트 전달 불필요)
     
     **워크플로우:**
+    Phase 1: 검증 (DB 트랜잭션 외부)
     1. PGM_ID 자동 생성 (예: PGM_1, PGM_2)
-    2. 파일 타입 검증 (.zip, .xlsx)
-    3. 파일 검증 (템플릿 Logic ID vs ZIP 파일 목록)
-    4. 불필요한 파일 제거
-    5. 파일 저장 (DOCUMENTS 테이블)
-    6. 프로그램 생성 (PROGRAMS 테이블)
+    2. 파일 타입/크기 검증 (FileValidationService)
+    3. 템플릿/ZIP 구조 검증 (FileValidationService)
+    4. 레더 파일 매칭 검증 (FileValidationService)
+    
+    Phase 2: 파일 저장 (DB 트랜잭션 외부)
+    5. 레더 ZIP 필터링 및 저장 (FileStorageService)
+    6. 템플릿 파일 저장 (FileStorageService)
+    
+    Phase 3: DB 저장 (트랜잭션 내부)
+    7. 레더 CSV 문서 레코드 일괄 생성 (DocumentService)
+    8. 템플릿 문서 레코드 생성 + 자동 파싱 (DocumentService)
+    9. 프로그램 레코드 생성 (ProgramService)
+    10. 커밋 (성공) 또는 롤백 (실패 시 파일 삭제)
     
     **파일 요구사항:**
-    - `ladder_zip`: 레더 CSV 파일들이 압축된 ZIP 파일
-    - `template_xlsx`: Logic ID 컬럼이 포함된 템플릿 엑셀 파일
+    - `pgm_ladder_zip_file`: 레더 CSV 파일들이 압축된 ZIP 파일
+    - `pgm_template_file`: Logic ID 컬럼이 포함된 템플릿 엑셀 파일
     
     **검증 규칙:**
     - 템플릿의 Logic ID와 ZIP 내부 파일명 비교
     - 누락된 파일이 있으면 에러 반환
     - 불필요한 파일은 자동 제거
     """
-    result = program_upload_service.upload_and_create_program(
+    result = program_upload_service.upload_program_with_files(  # Phase 4: 메서드명 변경
         pgm_name=pgm_name,
-        ladder_zip=ladder_zip,
-        template_xlsx=template_xlsx,
+        pgm_ladder_zip_file=pgm_ladder_zip_file,  # Phase 4: 변수명 변경
+        pgm_template_file=pgm_template_file,      # Phase 4: 변수명 변경
         create_user=create_user,
         pgm_version=pgm_version,
         description=description,

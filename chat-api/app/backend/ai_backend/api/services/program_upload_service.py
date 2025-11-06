@@ -1,5 +1,14 @@
 # _*_ coding: utf-8 _*_
-"""Program Upload Service for handling program file upload workflow."""
+"""
+Program Upload Service for handling program file upload workflow.
+
+Phase 3 리팩토링 (2025-11-06):
+- FileValidationService, FileStorageService 통합
+- 명확한 변수명 적용 (pgm_ladder_zip_file, pgm_template_file)
+- 환경변수 기반 설정
+- DocumentService의 새 메서드 사용
+- 트랜잭션 경계 명확화
+"""
 import logging
 import io
 import zipfile
@@ -7,11 +16,13 @@ from typing import Dict, List, Optional
 from pathlib import Path
 from datetime import datetime
 
-import pandas as pd
 from fastapi import UploadFile
 from sqlalchemy.orm import Session
 
+from ai_backend.config.simple_settings import settings
 from ai_backend.api.services.sequence_service import SequenceService
+from ai_backend.api.services.file_validation_service import FileValidationService
+from ai_backend.api.services.file_storage_service import FileStorageService
 from ai_backend.api.services.document_service import DocumentService
 from ai_backend.api.services.template_service import TemplateService
 from ai_backend.api.services.program_service import ProgramService
@@ -24,37 +35,64 @@ logger = logging.getLogger(__name__)
 
 class ProgramUploadService:
     """
-    프로그램 파일 업로드 통합 서비스
+    프로그램 파일 업로드 통합 서비스 (Phase 3 리팩토링)
     
     워크플로우:
-    0. PGM_ID 자동 생성 (서버)
-    1. 파일 타입 검증
-    2. 파일 검증 (Logic ID vs ZIP 파일 목록)
-    3. 불필요한 파일 제거
-    4. 파일 저장 (DOCUMENTS 테이블)
-    5. 프로그램 생성 (PROGRAMS 테이블)
+    Phase 1: 검증 (DB 트랜잭션 외부)
+    Step 1-2: 레더 ZIP 타입/크기 검증
+    Step 3:   ZIP 구조 검증 (손상 여부, 파일 목록만)
+    Step 4-5: 템플릿 타입/크기 검증
+    Step 6:   템플릿 구조 검증 (필수 컬럼, Logic ID 추출)
+    Step 7:   매칭 검증 (템플릿 Logic ID vs ZIP 파일 목록)
+    Step 8:   매칭된 CSV만 구조 검증 (메모리) ⭐ Phase 1.5 신규
+    
+    Phase 2: 파일 저장 (DB 트랜잭션 외부)
+    Step 9:  레더 ZIP 필터링
+    Step 10: 레더 ZIP 저장 및 압축 해제 (FileStorageService)
+    Step 11: 템플릿 파일 저장 (FileStorageService)
+    
+    Phase 3: DB 저장 (트랜잭션 시작)
+    Step 12: 레더 CSV 문서 레코드 일괄 생성 (DocumentService)
+    Step 13: 템플릿 문서 레코드 생성 + 자동 파싱 (DocumentService)
+    Step 14: 프로그램 레코드 생성 (ProgramService)
+    Step 15: 커밋
     """
     
     def __init__(
         self,
         db: Session,
         sequence_service: SequenceService,
+        file_validation_service: FileValidationService,
+        file_storage_service: FileStorageService,
         document_service: DocumentService,
         template_service: TemplateService,
         program_service: ProgramService
     ):
+        """
+        Args:
+            db: 데이터베이스 세션
+            sequence_service: PGM_ID 생성 서비스
+            file_validation_service: 파일 검증 서비스 (Phase 1 신규)
+            file_storage_service: 파일 저장 서비스 (Phase 1 신규)
+            document_service: 문서 DB 서비스 (Phase 2 리팩토링)
+            template_service: 템플릿 서비스
+            program_service: 프로그램 서비스
+        """
         self.db = db
+        self.settings = settings  # 환경변수 주입
         self.sequence_service = sequence_service
+        self.file_validation_service = file_validation_service
+        self.file_storage_service = file_storage_service
         self.document_service = document_service
         self.template_service = template_service
         self.program_service = program_service
         self.program_crud = ProgramCrud(db)
     
-    def upload_and_create_program(
+    def upload_program_with_files(
         self,
         pgm_name: str,
-        ladder_zip: UploadFile,
-        template_xlsx: UploadFile,
+        pgm_ladder_zip_file: UploadFile,  # 명확한 변수명
+        pgm_template_file: UploadFile,    # 명확한 변수명
         create_user: str,
         pgm_version: Optional[str] = None,
         description: Optional[str] = None,
@@ -63,10 +101,16 @@ class ProgramUploadService:
         """
         프로그램 파일 업로드 및 생성 (전체 워크플로우)
         
+        Phase 3 리팩토링 (2025-11-06):
+        - 명확한 변수명 사용
+        - 새 서비스 통합 (FileValidationService, FileStorageService)
+        - DocumentService 새 메서드 사용
+        - 트랜잭션 경계 명확화
+        
         Args:
             pgm_name: 프로그램 명칭
-            ladder_zip: 레더 CSV 파일들이 압축된 ZIP
-            template_xlsx: 필수 파일 목록이 기재된 템플릿 파일
+            pgm_ladder_zip_file: 레더 CSV 파일들이 압축된 ZIP
+            pgm_template_file: 필수 파일 목록이 기재된 템플릿 파일
             create_user: 생성자
             pgm_version: 프로그램 버전 (선택)
             description: 프로그램 설명 (선택)
@@ -78,54 +122,194 @@ class ProgramUploadService:
                 'pgm_id': str,
                 'validation_result': Dict,
                 'saved_files': Dict,
+                'summary': Dict,
                 'message': str
             }
         """
+        saved_file_paths = []  # 롤백용
+        
         try:
-            # 0. PGM_ID 자동 생성 (서버)
+            # ======================================
+            # Phase 1: 검증 (DB 트랜잭션 외부)
+            # ======================================
+            
+            # 0. PGM_ID 자동 생성
             pgm_id = self.sequence_service.generate_pgm_id()
-            logger.info(f"[Step 0] PGM_ID 자동 생성: {pgm_id}")
+            logger.info(f"✅ [Step 0] PGM_ID 자동 생성: {pgm_id}")
             
-            # 1. 파일 타입 검증
-            logger.info(f"[Step 1] 파일 타입 검증 시작: pgm_id={pgm_id}")
-            self._validate_file_types(ladder_zip, template_xlsx)
-            
-            # 2. 파일 검증 (Logic ID vs ZIP 파일 목록)
-            logger.info(f"[Step 2] 파일 검증 시작: pgm_id={pgm_id}")
-            validation_result = self._validate_files(
-                ladder_zip, template_xlsx, pgm_id
+            # 1. 레더 ZIP 파일 타입/크기 검증 (환경변수 기반)
+            self.file_validation_service.validate_ladder_zip_file_type(
+                pgm_ladder_zip_file
+            )
+            self.file_validation_service.validate_ladder_zip_file_size(
+                pgm_ladder_zip_file
+            )
+            logger.info(
+                f"✅ [Step 1] 레더 ZIP 파일 검증 완료: {pgm_ladder_zip_file.filename}"
             )
             
-            # 3. 검증 실패 시 에러
+            # 2. 템플릿 파일 타입/크기 검증 (환경변수 기반)
+            self.file_validation_service.validate_template_file_type(
+                pgm_template_file
+            )
+            self.file_validation_service.validate_template_file_size(
+                pgm_template_file
+            )
+            logger.info(
+                f"✅ [Step 2] 템플릿 파일 검증 완료: {pgm_template_file.filename}"
+            )
+            
+            # 3. 템플릿 구조 검증 (환경변수 기반 필수 컬럼)
+            template_structure = self.file_validation_service.validate_template_file_structure(
+                pgm_template_file
+            )
+            logger.info(
+                f"✅ [Step 3] 템플릿 구조 검증 완료: "
+                f"{len(template_structure['logic_ids'])}개 Logic ID"
+            )
+            
+            # 4. ZIP 구조 검증
+            zip_structure = self.file_validation_service.validate_ladder_zip_structure(
+                pgm_ladder_zip_file
+            )
+            logger.info(
+                f"✅ [Step 4] ZIP 구조 검증 완료: "
+                f"{len(zip_structure['file_list'])}개 파일"
+            )
+            
+            # 5. 레더 파일 매칭 검증
+            validation_result = self.file_validation_service.validate_ladder_files_match(
+                required_files=template_structure['logic_ids'],
+                actual_files=zip_structure['file_list']
+            )
+            
             if not validation_result['validation_passed']:
                 missing_files_str = ', '.join(validation_result['missing_files'])
-                logger.error(f"파일 검증 실패: pgm_id={pgm_id}, 누락 파일={missing_files_str}")
+                logger.error(
+                    f"❌ 파일 검증 실패: pgm_id={pgm_id}, "
+                    f"누락 파일={missing_files_str}"
+                )
                 raise HandledException(
                     ResponseCode.INVALID_DATA_FORMAT,
-                    msg=f"필수 파일이 누락되었습니다: {missing_files_str}"
+                    msg=f"필수 레더 파일이 누락되었습니다: {missing_files_str}"
                 )
             
-            logger.info(f"파일 검증 통과: matched={len(validation_result['matched_files'])}, "
-                       f"extra={len(validation_result['extra_files'])}")
+            logger.info(
+                f"✅ [Step 7] 레더 파일 매칭 검증 완료: "
+                f"{len(validation_result['matched_files'])}개 일치"
+            )
             
-            # 4. 불필요한 파일 제거 (검증 통과 시)
-            logger.info(f"[Step 3] 불필요한 파일 제거: {len(validation_result['extra_files'])}개")
-            filtered_zip_bytes = self._filter_unnecessary_files(
-                ladder_zip,
+            # 8. 매칭된 레더 CSV 파일 구조 검증 (메모리) - Phase 1.5 신규
+            csv_structure_validation_result = self.file_validation_service.validate_matched_ladder_csv_structures_in_memory(
+                ladder_zip_file=pgm_ladder_zip_file,
+                matched_files=validation_result['matched_files']
+            )
+            
+            logger.info(
+                f"✅ [Step 8] 레더 CSV 구조 검증 완료: "
+                f"{csv_structure_validation_result['validated_count']}개 파일 통과"
+            )
+            
+            # ======================================
+            # Phase 2: 파일 저장 (DB 트랜잭션 외부)
+            # ======================================
+            
+            # 9. 레더 ZIP 필터링 (필요한 파일만)
+            filtered_ladder_zip_bytes = self._filter_ladder_zip(
+                pgm_ladder_zip_file,
                 validation_result['matched_files']
             )
+            logger.info(f"✅ [Step 9] 레더 ZIP 필터링 완료")
             
-            # 5. 파일 저장 (DOCUMENTS 테이블 자동 등록)
-            logger.info(f"[Step 4] 파일 저장 시작: pgm_id={pgm_id}")
-            save_result = self._save_files(
-                filtered_zip_bytes,
-                template_xlsx,
-                pgm_id,
-                create_user
+            # 10. 레더 ZIP 저장 및 압축 해제 (환경변수 기반 경로)
+            ladder_zip_extract_result = self.file_storage_service.save_and_extract_ladder_zip(
+                ladder_zip_bytes=filtered_ladder_zip_bytes,
+                pgm_id=pgm_id,
+                original_filename=pgm_ladder_zip_file.filename
             )
             
-            # 6. ⭐ 프로그램 생성 (단순화: create_program()만 호출)
-            logger.info(f"[Step 5] 프로그램 생성: pgm_id={pgm_id}")
+            # 저장된 파일 경로 기록 (롤백용)
+            saved_file_paths.extend([
+                f['path'] for f in ladder_zip_extract_result['extracted_ladder_files']
+            ])
+            if ladder_zip_extract_result.get('original_zip'):
+                saved_file_paths.append(
+                    ladder_zip_extract_result['original_zip']['path']
+                )
+            
+            logger.info(
+                f"✅ [Step 10] 레더 파일 저장 완료: "
+                f"{len(ladder_zip_extract_result['extracted_ladder_files'])}개"
+            )
+            
+            # 11. 템플릿 파일 저장 (환경변수 기반 경로)
+            template_save_result = self.file_storage_service.save_template_file(
+                template_file=pgm_template_file,
+                pgm_id=pgm_id
+            )
+            saved_file_paths.append(template_save_result['file_path'])
+            
+            logger.info(f"✅ [Step 11] 템플릿 파일 저장 완료")
+            
+            # ======================================
+            # Phase 3: DB 저장 (트랜잭션 시작)
+            # ======================================
+            
+            # 12. 레더 CSV 문서 레코드 일괄 생성
+            pgm_ladder_csv_documents_data = [
+                {
+                    'document_name': file_info['filename'],
+                    'original_filename': file_info['filename'],
+                    'file_key': f"{pgm_id}/{self.settings.pgm_ladder_dir_name}/{file_info['filename']}",
+                    'upload_path': str(file_info['path']),
+                    'file_size': file_info['size'],
+                    'pgm_id': pgm_id,
+                    'user_id': create_user,
+                    'is_public': False,
+                    'metadata': {
+                        'file_hash': file_info.get('hash'),
+                        'upload_method': 'program_upload',
+                        'extracted_from_zip': True
+                    }
+                }
+                for file_info in ladder_zip_extract_result['extracted_ladder_files']
+            ]
+            
+            pgm_ladder_csv_documents = self.document_service.bulk_create_ladder_csv_documents(
+                pgm_ladder_csv_documents_data
+            )
+            
+            logger.info(
+                f"✅ [Step 12] 레더 CSV 문서 레코드 생성 완료: "
+                f"{len(pgm_ladder_csv_documents)}개"
+            )
+            
+            # 13. 템플릿 문서 레코드 생성 (자동으로 템플릿 파싱됨)
+            pgm_template_document = self.document_service.create_template_document(
+                document_name=template_save_result['filename'],
+                original_filename=template_save_result['filename'],
+                file_key=f"{pgm_id}/{self.settings.pgm_template_dir_name}/{template_save_result['filename']}",
+                upload_path=str(template_save_result['file_path']),
+                file_size=template_save_result['size'],
+                pgm_id=pgm_id,
+                user_id=create_user,
+                is_public=False,
+                metadata={
+                    'file_hash': template_save_result.get('hash'),
+                    'upload_method': 'program_upload'
+                }
+            )
+            # ↑ create_template_document() 내부에서 자동으로:
+            #    - ProgramTemplateProcessor 호출
+            #    - 템플릿 파싱
+            #    - PGM_TEMPLATE 테이블 INSERT
+            
+            logger.info(
+                f"✅ [Step 13] 템플릿 문서 레코드 생성 및 파싱 완료: "
+                f"{pgm_template_document.document_id}"
+            )
+            
+            # 14. 프로그램 레코드 생성
             program = self.program_service.create_program(
                 pgm_id=pgm_id,
                 pgm_name=pgm_name,
@@ -135,20 +319,38 @@ class ProgramUploadService:
                 notes=notes
             )
             
-            # 7. 커밋
-            self.db.commit()
-            logger.info(f"[Success] 프로그램 생성 완료: pgm_id={pgm_id}")
+            logger.info(
+                f"✅ [Step 14] 프로그램 레코드 생성 완료: {pgm_id}"
+            )
             
-            # 8. 결과 반환
+            # 15. 커밋
+            self.db.commit()
+            logger.info(f"🎉 [Success] 프로그램 업로드 완료: {pgm_id}")
+            
+            # 16. 결과 반환
             return {
                 'program': program,
                 'pgm_id': pgm_id,
                 'validation_result': validation_result,
-                'saved_files': save_result,
+                'saved_files': {
+                    'ladder_csv_documents': [
+                        {
+                            'document_id': doc.document_id,
+                            'document_name': doc.document_name,
+                            'upload_path': doc.upload_path
+                        }
+                        for doc in pgm_ladder_csv_documents
+                    ],
+                    'template_document': {
+                        'document_id': pgm_template_document.document_id,
+                        'document_name': pgm_template_document.document_name,
+                        'upload_path': pgm_template_document.upload_path
+                    }
+                },
                 'summary': {
-                    'total_ladder_files': len(validation_result['matched_files']),
+                    'total_ladder_files': len(pgm_ladder_csv_documents),
                     'template_parsed': True,
-                    'template_row_count': len(validation_result['required_files'])
+                    'template_row_count': len(template_structure['logic_ids'])
                 },
                 'message': '프로그램이 성공적으로 생성되었습니다'
             }
@@ -156,18 +358,26 @@ class ProgramUploadService:
         except HandledException:
             # HandledException은 그대로 전파
             self.db.rollback()
+            
+            # 저장된 파일 삭제
+            if saved_file_paths:
+                self.file_storage_service.delete_files(saved_file_paths)
+                logger.info(f"🔄 [Rollback] 저장된 파일 삭제 완료")
+            
             raise
+            
         except Exception as e:
             # 롤백
             self.db.rollback()
-            logger.error(f"프로그램 업로드 실패: {str(e)}", exc_info=True)
+            logger.error(f"❌ [Error] 프로그램 업로드 실패: {str(e)}", exc_info=True)
             
-            # 저장된 파일 삭제 (선택사항)
-            if 'save_result' in locals():
+            # 저장된 파일 삭제
+            if saved_file_paths:
                 try:
-                    self._cleanup_saved_files(save_result)
+                    self.file_storage_service.delete_files(saved_file_paths)
+                    logger.info(f"🔄 [Rollback] 저장된 파일 삭제 완료")
                 except Exception as cleanup_error:
-                    logger.error(f"파일 정리 실패: {str(cleanup_error)}")
+                    logger.error(f"❌ 파일 정리 실패: {str(cleanup_error)}")
             
             raise HandledException(
                 ResponseCode.UNDEFINED_ERROR,
@@ -175,175 +385,25 @@ class ProgramUploadService:
                 e=e
             )
     
-    def _validate_file_types(self, ladder_zip: UploadFile, template_xlsx: UploadFile):
-        """파일 타입 검증"""
-        if not ladder_zip.filename or not ladder_zip.filename.endswith('.zip'):
-            raise HandledException(
-                ResponseCode.DOCUMENT_INVALID_FILE_TYPE,
-                msg="레더 파일은 .zip 형식이어야 합니다"
-            )
-        
-        if not template_xlsx.filename or not template_xlsx.filename.endswith('.xlsx'):
-            raise HandledException(
-                ResponseCode.DOCUMENT_INVALID_FILE_TYPE,
-                msg="템플릿 파일은 .xlsx 형식이어야 합니다"
-            )
-    
-    def _validate_files(
+    def _filter_ladder_zip(
         self,
-        ladder_zip: UploadFile,
-        template_xlsx: UploadFile,
-        pgm_id: str
-    ) -> Dict:
-        """
-        파일 검증 (Logic ID vs ZIP 파일 목록)
-        
-        Returns:
-            {
-                'required_files': List[str],
-                'zip_files': List[str],
-                'matched_files': List[str],
-                'missing_files': List[str],
-                'extra_files': List[str],
-                'validation_passed': bool
-            }
-        """
-        # 템플릿에서 필수 파일 추출
-        required_files = self._extract_required_files_from_template(
-            template_xlsx, pgm_id
-        )
-        
-        # ZIP에서 파일 목록 추출
-        zip_files = self._extract_file_list_from_zip(ladder_zip)
-        
-        # 파일 비교
-        return self._compare_files(required_files, zip_files)
-    
-    def _extract_required_files_from_template(
-        self,
-        template_xlsx: UploadFile,
-        pgm_id: str
-    ) -> List[str]:
-        """
-        XLSX 템플릿 파일에서 Logic ID 컬럼을 읽어 필수 CSV 파일 목록 생성
-        
-        Logic ID 예시: "0000_11", "0001_11", "0002_11"
-        변환 결과: ["0000_11.csv", "0001_11.csv", "0002_11.csv"]
-        """
-        try:
-            # 메모리에서 XLSX 읽기
-            file_content = template_xlsx.file.read()
-            template_xlsx.file.seek(0)  # 포인터 초기화
-            
-            df = pd.read_excel(io.BytesIO(file_content))
-            
-            # 필수 컬럼 확인
-            if 'Logic ID' not in df.columns:
-                raise HandledException(
-                    ResponseCode.REQUIRED_FIELD_MISSING,
-                    msg="템플릿 파일에 'Logic ID' 컬럼이 없습니다"
-                )
-            
-            # Logic ID에서 필수 파일 목록 생성
-            required_files = []
-            for logic_id in df['Logic ID']:
-                if pd.notna(logic_id):
-                    csv_filename = f"{str(logic_id).strip()}.csv"
-                    required_files.append(csv_filename)
-            
-            # 중복 제거
-            unique_files = list(set(required_files))
-            logger.info(f"템플릿에서 필수 파일 {len(unique_files)}개 추출: {unique_files[:5]}...")
-            
-            return unique_files
-            
-        except HandledException:
-            raise
-        except Exception as e:
-            logger.error(f"템플릿 파일 파싱 실패: {str(e)}")
-            raise HandledException(
-                ResponseCode.INVALID_DATA_FORMAT,
-                msg=f"템플릿 파일 파싱 실패: {str(e)}",
-                e=e
-            )
-    
-    def _extract_file_list_from_zip(self, ladder_zip: UploadFile) -> List[str]:
-        """
-        ZIP 파일 내부의 CSV 파일 목록 추출
-        
-        주의: 디렉토리는 제외, 파일명만 추출
-        """
-        try:
-            # 메모리에서 ZIP 읽기
-            file_content = ladder_zip.file.read()
-            ladder_zip.file.seek(0)  # 포인터 초기화
-            
-            zip_files = []
-            with zipfile.ZipFile(io.BytesIO(file_content), 'r') as zip_ref:
-                for info in zip_ref.infolist():
-                    # 디렉토리 제외
-                    if not info.is_dir():
-                        # 파일명만 추출 (경로 제거)
-                        filename = Path(info.filename).name
-                        zip_files.append(filename)
-            
-            logger.info(f"ZIP에서 파일 {len(zip_files)}개 추출: {zip_files[:5]}...")
-            return zip_files
-            
-        except zipfile.BadZipFile:
-            raise HandledException(
-                ResponseCode.DOCUMENT_INVALID_FILE_TYPE,
-                msg="손상된 ZIP 파일입니다"
-            )
-        except Exception as e:
-            logger.error(f"ZIP 파일 읽기 실패: {str(e)}")
-            raise HandledException(
-                ResponseCode.DOCUMENT_UPLOAD_ERROR,
-                msg=f"ZIP 파일 읽기 실패: {str(e)}",
-                e=e
-            )
-    
-    def _compare_files(
-        self,
-        required_files: List[str],
-        zip_files: List[str]
-    ) -> Dict:
-        """필수 파일과 ZIP 파일 비교"""
-        required_set = set(required_files)
-        zip_set = set(zip_files)
-        
-        matched = required_set & zip_set
-        missing = required_set - zip_set
-        extra = zip_set - required_set
-        
-        return {
-            'required_files': list(required_set),
-            'zip_files': list(zip_set),
-            'matched_files': list(matched),
-            'missing_files': list(missing),
-            'extra_files': list(extra),
-            'validation_passed': len(missing) == 0
-        }
-    
-    def _filter_unnecessary_files(
-        self,
-        ladder_zip: UploadFile,
+        pgm_ladder_zip_file: UploadFile,
         keep_files: List[str]
     ) -> bytes:
         """
-        ZIP에서 필요한 파일만 남기고 새로운 ZIP 생성
+        레더 ZIP에서 필요한 파일만 남기고 새로운 ZIP 생성
         
         Args:
-            ladder_zip: 원본 ZIP 파일
-            keep_files: 유지할 파일 목록
+            pgm_ladder_zip_file: 원본 레더 ZIP 파일
+            keep_files: 유지할 파일 목록 (예: ["0000_11.csv", "0001_11.csv"])
             
         Returns:
             bytes: 필터링된 ZIP 파일 바이트
         """
         try:
             # 원본 ZIP 읽기
-            original_content = ladder_zip.file.read()
-            ladder_zip.file.seek(0)
+            original_content = pgm_ladder_zip_file.file.read()
+            pgm_ladder_zip_file.file.seek(0)  # 포인터 복원
             
             # 새로운 ZIP 생성
             filtered_buffer = io.BytesIO()
@@ -358,96 +418,19 @@ class ProgramUploadService:
                                 new_zip.writestr(info, original_zip.read(info.filename))
             
             filtered_buffer.seek(0)
-            return filtered_buffer.read()
+            filtered_bytes = filtered_buffer.read()
+            
+            logger.info(
+                f"레더 ZIP 필터링 완료: "
+                f"{len(keep_files)}개 파일 유지"
+            )
+            
+            return filtered_bytes
             
         except Exception as e:
-            logger.error(f"ZIP 파일 필터링 실패: {str(e)}")
+            logger.error(f"❌ ZIP 파일 필터링 실패: {str(e)}")
             raise HandledException(
                 ResponseCode.DOCUMENT_UPLOAD_ERROR,
                 msg=f"ZIP 파일 필터링 실패: {str(e)}",
                 e=e
             )
-    
-    def _save_files(
-        self,
-        filtered_zip_bytes: bytes,
-        template_xlsx: UploadFile,
-        pgm_id: str,
-        user_id: str
-    ) -> Dict:
-        """
-        검증된 파일들을 지정된 경로에 저장
-        
-        Returns:
-            {
-                'ladder_files': Dict,
-                'template_file': Dict
-            }
-        """
-        try:
-            # 1. 레더 파일 저장 (ZIP 압축 해제)
-            # 기존 document_service.upload_zip_document() 재사용
-            # UploadFile 객체로 변환
-            ladder_upload_file = self._create_upload_file_from_bytes(
-                filtered_zip_bytes,
-                filename="ladder_files.zip"
-            )
-            
-            ladder_result = self.document_service.upload_zip_document(
-                file=ladder_upload_file,
-                pgm_id=pgm_id,
-                user_id=user_id,
-                is_public=False,
-                keep_zip_file=True  # 원본 ZIP도 저장
-            )
-            
-            # 2. 템플릿 파일 저장
-            # 기존 document_service.upload_document() 재사용
-            template_result = self.document_service.upload_document(
-                file=template_xlsx,
-                user_id=user_id,
-                is_public=False,
-                document_type='pgm_template',
-                metadata={'pgm_id': pgm_id}
-            )
-            
-            return {
-                'ladder_files': ladder_result,
-                'template_file': template_result
-            }
-            
-        except Exception as e:
-            logger.error(f"파일 저장 실패: {str(e)}")
-            raise
-    
-    def _create_upload_file_from_bytes(
-        self,
-        file_bytes: bytes,
-        filename: str
-    ) -> UploadFile:
-        """바이트 데이터에서 UploadFile 객체 생성"""
-        from fastapi import UploadFile as FastAPIUploadFile
-        
-        file_obj = io.BytesIO(file_bytes)
-        
-        # UploadFile 객체 생성
-        upload_file = FastAPIUploadFile(
-            file=file_obj,
-            filename=filename
-        )
-        
-        return upload_file
-    
-    def _cleanup_saved_files(self, save_result: Dict):
-        """
-        저장된 파일 삭제 (롤백 시)
-        
-        주의: 실제 구현 시 파일 시스템에서 파일을 삭제해야 함
-        """
-        try:
-            # TODO: 실제 파일 삭제 로직 구현
-            # 예: os.remove(file_path)
-            logger.warning("파일 정리 로직은 아직 구현되지 않았습니다")
-            pass
-        except Exception as e:
-            logger.error(f"파일 정리 실패: {str(e)}")

@@ -1,5 +1,548 @@
 # 📋 PLC 프로그램 생성 프로세스 리팩토링 계획서
 
+> **최종 업데이트:** 2025-11-06  
+> **상태:** 🎉 완료 (Phase 5 완료)
+
+---
+
+## 📅 작업 이력
+
+### 2025-11-06 - Phase 5 완료 ✅
+
+**작업 내용:**
+- ✅ 사용하지 않는 import 정리 (4개 파일)
+  - document_service.py: Path 제거
+  - program_upload_service.py: pandas 제거
+  - dependencies.py: get_redis_client 중복 제거
+- ✅ 코드 스타일 통일 확인
+  - docstring 형식 일관성 확인
+  - 로깅 메시지 일관성 확인 (✅, ❌, 🎉 이모지)
+- ✅ 최종 검토
+  - Phase 0-4 규칙 준수 확인
+  - 환경변수 사용 확인
+  - 명확한 변수명 확인
+  - 새 서비스 통합 확인
+  - 트랜잭션 경계 명확화 확인
+- ✅ 문서 업데이트
+  - PROJECT_REFERENCE_GUIDE.md
+  - CREATE_PROGRAM_LOGIC_REFACTORING_PLAN.md
+
+**파일 변경:**
+- 📝 `ai_backend/api/services/document_service.py` (정리 완료)
+- 📝 `ai_backend/api/services/program_upload_service.py` (정리 완료)
+- 📝 `ai_backend/api/routers/program_router.py` (검토 완료)
+- 📝 `ai_backend/core/dependencies.py` (정리 완료)
+- 📝 `docs/PROJECT_REFERENCE_GUIDE.md` (업데이트)
+- 📝 `docs/CREATE_PROGRAM_LOGIC_REFACTORING_PLAN.md` (업데이트)
+
+**최종 검토 체크리스트:**
+
+| 항목 | 상태 |
+|------|------|
+| 환경변수 사용 | ✅ |
+| 명확한 변수명 | ✅ |
+| 새 서비스 통합 | ✅ |
+| 새 메서드 사용 | ✅ |
+| 트랜잭션 경계 | ✅ |
+| 로깅 일관성 | ✅ |
+| import 정리 | ✅ |
+| 문서 업데이트 | ✅ |
+
+**결과:**
+- 코드 라인 수: 변화 없음 (깨끗한 코드 유지)
+- import 수: 3개 감소 (Path, pandas, get_redis_client)
+- 코드 품질: 향상 (일관성, 가독성)
+
+**작업 시간:** 1시간
+
+**다음 단계:** 성능 최적화 (선택사항)
+
+---
+
+### 2025-11-06 - Phase 4 완료 ✅
+
+**작업 내용:**
+- ✅ Router 파라미터명 변경
+  - ladder_zip → pgm_ladder_zip_file
+  - template_xlsx → pgm_template_file
+- ✅ 서비스 메서드 호출 변경
+  - upload_and_create_program() → upload_program_with_files()
+- ✅ dependencies.py 업데이트
+  - get_file_validation_service() 추가
+  - get_file_storage_service() 추가
+  - get_program_upload_service()에 새 서비스 주입
+- ✅ Swagger 문서 업데이트
+  - 3단계 워크플로우 명시
+  - 파라미터 설명 명확화
+
+**파일 변경:**
+- 📝 `ai_backend/api/routers/program_router.py` (리팩토링 완료)
+- 📝 `ai_backend/core/dependencies.py` (새 서비스 주입)
+- 📝 `docs/PROJECT_REFERENCE_GUIDE.md` (업데이트)
+- 📝 `docs/CREATE_PROGRAM_LOGIC_REFACTORING_PLAN.md` (업데이트)
+
+**주요 변경사항:**
+```python
+# Router 파라미터명 변경
+@router.post("/programs/upload")
+async def upload_program_files(
+    pgm_ladder_zip_file: UploadFile,  # ladder_zip → 변경
+    pgm_template_file: UploadFile,    # template_xlsx → 변경
+    ...
+)
+
+# 서비스 호출 변경
+result = program_upload_service.upload_program_with_files(
+    pgm_ladder_zip_file=pgm_ladder_zip_file,
+    pgm_template_file=pgm_template_file,
+    ...
+)
+
+# dependencies.py 업데이트
+def get_file_validation_service() -> FileValidationService:
+    return FileValidationService()
+
+def get_file_storage_service() -> FileStorageService:
+    return FileStorageService()
+
+def get_program_upload_service(
+    ...
+    file_validation_service: FileValidationService = Depends(get_file_validation_service),
+    file_storage_service: FileStorageService = Depends(get_file_storage_service),
+    ...
+):
+    return ProgramUploadService(
+        ...
+        file_validation_service=file_validation_service,
+        file_storage_service=file_storage_service,
+        ...
+    )
+```
+
+**API 엔드포인트:**
+- URL: `POST /programs/upload` (변경 없음)
+- Request: Form data + multipart/form-data
+- Response: ProgramUploadResponse (변경 없음)
+
+**작업 시간:** 1.5시간
+
+**다음 단계:** Phase 5 - 레거시 코드 제거 (선택사항)
+
+---
+
+### 2025-11-06 - Phase 3 완료 ✅
+
+**작업 내용:**
+- ✅ ProgramUploadService에 새 서비스 통합
+  - FileValidationService 주입
+  - FileStorageService 주입
+  - DocumentService 새 메서드 사용
+- ✅ 메서드명 변경
+  - upload_and_create_program() → upload_program_with_files()
+- ✅ 변수명 변경 (명확한 이름)
+  - ladder_zip → pgm_ladder_zip_file
+  - template_xlsx → pgm_template_file
+- ✅ 환경변수 주입
+  - settings = program_upload_settings
+  - self.settings.pgm_ladder_dir_name
+  - self.settings.pgm_template_dir_name
+- ✅ 트랜잭션 경계 명확화
+  - Phase 1: 검증 (DB 트랜잭션 외부)
+  - Phase 2: 파일 저장 (DB 트랜잭션 외부)
+  - Phase 3: DB 저장 (트랜잭션 내부 - commit/rollback)
+- ✅ 불필요한 메서드 제거 (9개)
+
+**파일 변경:**
+- 📝 `ai_backend/api/services/program_upload_service.py` (리팩토링 완료)
+- 📝 `docs/PROJECT_REFERENCE_GUIDE.md` (업데이트)
+- 📝 `docs/CREATE_PROGRAM_LOGIC_REFACTORING_PLAN.md` (업데이트)
+
+**주요 변경사항:**
+```python
+# 제거된 메서드 (9개)
+❌ _validate_file_types()
+❌ _validate_files()
+❌ _extract_required_files_from_template()
+❌ _extract_file_list_from_zip()
+❌ _compare_files()
+❌ _filter_unnecessary_files()  # → _filter_ladder_zip()로 변경 (유지)
+❌ _save_files()
+❌ _create_upload_file_from_bytes()
+❌ _cleanup_saved_files()
+
+# 변경된 메서드 (2개)
+✅ upload_and_create_program() → upload_program_with_files()
+✅ _filter_unnecessary_files() → _filter_ladder_zip() (명확한 이름)
+
+# 새 서비스 통합
+class ProgramUploadService:
+    def __init__(
+        self,
+        db: Session,
+        sequence_service: SequenceService,
+        file_validation_service: FileValidationService,  # ⭐ NEW
+        file_storage_service: FileStorageService,        # ⭐ NEW
+        document_service: DocumentService,               # Phase 2
+        template_service: TemplateService,
+        program_service: ProgramService
+    ):
+        self.settings = settings  # 환경변수
+        ...
+
+# 명확한 변수명
+upload_program_with_files(
+    pgm_ladder_zip_file: UploadFile,  # ladder_zip → pgm_ladder_zip_file
+    pgm_template_file: UploadFile,    # template_xlsx → pgm_template_file
+    ...
+)
+
+# 트랜잭션 경계 명확화
+try:
+    # Phase 1: 검증 (DB 트랜잭션 외부)
+    file_validation_service.validate_...()
+    
+    # Phase 2: 파일 저장 (DB 트랜잭션 외부)
+    file_storage_service.save_...()
+    
+    # Phase 3: DB 저장 (트랜잭션 내부)
+    document_service.bulk_create_ladder_csv_documents(...)
+    document_service.create_template_document(...)  # 자동 파싱
+    program_service.create_program(...)
+    self.db.commit()
+except:
+    self.db.rollback()
+    file_storage_service.delete_files(saved_file_paths)
+    raise
+```
+
+**복잡도 감소:**
+- 코드 라인 수: ~380줄 → ~350줄 (8% 감소)
+- 메서드 수: 11개 → 2개 (9개 삭제)
+- 메서드 호출 깊이: 5레벨 → 3레벨
+- 의존성: 분산되어 관리 용이
+
+**작업 시간:** 3시간
+
+**다음 단계:** Phase 4 - Router 및 Response 모델 업데이트
+
+---
+
+### 2025-11-06 - Phase 2 완료 ✅
+
+**작업 내용:**
+- ✅ DocumentService에서 파일 저장 로직 제거
+  - upload_zip_document() 삭제
+  - _extract_and_save_each_files() 삭제
+  - save_extracted_file_to_db() 삭제
+  - _save_original_zip() 삭제
+- ✅ DocumentService에서 검증 로직 제거 (upload_document 내부 로직은 유지)
+- ✅ 새 메서드 추가 (명확한 이름)
+  - create_ladder_csv_document() → 레더 CSV 문서 레코드 생성
+  - create_template_document() → 템플릿 문서 레코드 생성 + 자동 프로세서 호출
+  - bulk_create_ladder_csv_documents() → 레더 CSV 일괄 생성
+- ✅ 환경변수 주입
+  - document_type은 settings에서 가져오도록 수정
+  - settings.pgm_ladder_csv_doctype
+  - settings.pgm_template_doctype
+- ✅ ProgramDocumentProcessorFactory 통합
+  - __init__에 processor_factory 주입
+  - create_template_document()에서 자동으로 템플릿 프로세서 호출
+
+**파일 변경:**
+- 📝 `ai_backend/api/services/document_service.py` (리팩토링 완료)
+- 📝 `docs/PROJECT_REFERENCE_GUIDE.md` (업데이트)
+- 📝 `docs/CREATE_PROGRAM_LOGIC_REFACTORING_PLAN.md` (업데이트)
+
+**주요 변경사항:**
+```python
+# 제거된 메서드 (4개)
+❌ upload_zip_document()
+❌ _extract_and_save_each_files()
+❌ save_extracted_file_to_db()
+❌ _save_original_zip()
+
+# 추가된 메서드 (3개)
+✅ create_ladder_csv_document()
+✅ create_template_document()
+✅ bulk_create_ladder_csv_documents()
+
+# 환경변수 기반 document_type
+document_type = settings.pgm_ladder_csv_doctype  # "PGM_LADDER_CSV"
+document_type = settings.pgm_template_doctype    # "PGM_TEMPLATE_FILE"
+
+# ProgramDocumentProcessorFactory 통합
+class DocumentService(BaseDocumentService):
+    def __init__(self, db, upload_base_path=None, processor_factory=None):
+        self.processor_factory = processor_factory or ProgramDocumentProcessorFactory(...)
+    
+    def create_template_document(self, ...):
+        # 1. DB INSERT
+        document = self.document_crud.create_document(...)
+        
+        # 2. 자동 프로세서 호출
+        processor = self.processor_factory.get_processor(document.document_type)
+        processor.process(document)  # 템플릿 파싱
+        
+        return document
+```
+
+**복잡도 감소:**
+- 코드 라인 수: ~500줄 → ~400줄 (20% 감소)
+- 메서드 수: 35개 → 31개 (4개 삭제)
+- 의존성: 파일 저장/검증 로직 제거로 책임 명확화
+
+**작업 시간:** 2시간
+
+**다음 단계:** Phase 3 - ProgramUploadService 리팩토링
+
+---
+
+### 2025-11-06 - Phase 1.5 완료 ✅ ⭐ NEW
+
+**작업 내용:**
+- ✅ 환경변수 추가 (simple_settings.py)
+  - pgm_ladder_csv_required_columns: 필수 컬럼
+  - pgm_ladder_csv_header_row: 헤더 행 위치
+  - pgm_ladder_csv_validate_file_identifier: 파일 식별자 검증 on/off
+  - pgm_ladder_csv_validate_module_info: 모듈 정보 검증 on/off
+  - pgm_ladder_csv_module_info_prefix: 모듈 정보 접두사
+  - pgm_ladder_csv_min_data_rows: 최소 데이터 행 수
+  - pgm_ladder_csv_encoding: 인코딩
+  - pgm_ladder_csv_structure_validation_enabled: 검증 활성화 on/off
+  - get_pgm_ladder_csv_required_columns(): 편의 메서드
+
+- ✅ FileValidationService에 메서드 2개 추가
+  - validate_ladder_csv_structure_from_bytes(): CSV 구조 검증
+  - validate_matched_ladder_csv_structures_in_memory(): 매칭된 CSV 구조 검증
+
+- ✅ ProgramUploadService 수정
+  - Step 8 추가: 매칭된 CSV 구조 검증
+  - 기존 Step 6-12 → Step 9-15로 변경
+  - 워크플로우 주석 업데이트
+
+**파일 변경:**
+- 📝 `ai_backend/config/simple_settings.py` (환경변수 추가)
+- 📝 `ai_backend/api/services/file_validation_service.py` (메서드 2개 추가)
+- 📝 `ai_backend/api/services/program_upload_service.py` (Step 8 추가)
+- 📝 `docs/CREATE_PROGRAM_LOGIC_REFACTORING_PLAN.md` (업데이트)
+- 📝 `docs/PROJECT_REFERENCE_GUIDE.md` (업데이트)
+
+**주요 변경사항:**
+
+```python
+# 환경변수 추가
+pgm_ladder_csv_required_columns: str = Field(
+    default="Step No.,Line Statement,Instruction,I/O (Device),Blank,P/I Statement,Note",
+    env="PGM_LADDER_CSV_REQUIRED_COLUMNS"
+)
+
+# FileValidationService 새 메서드
+def validate_ladder_csv_structure_from_bytes(
+    self,
+    csv_bytes: bytes,
+    filename: str
+) -> Dict:
+    """
+    레더 CSV 파일 구조 검증 (메모리 상에서)
+    
+    검증 항목:
+    1. 파일 식별자 (1줄) - 선택적
+    2. 모듈 정보 (2줄) - 선택적
+    3. 필수 컬럼 (3줄) - 필수
+    4. 최소 데이터 행 수 - 필수
+    """
+
+def validate_matched_ladder_csv_structures_in_memory(
+    self,
+    ladder_zip_file: UploadFile,
+    matched_files: List[str]
+) -> Dict:
+    """
+    매칭된 레더 CSV 파일들만 메모리에서 구조 검증
+    
+    해결방안 C:
+    - ZIP을 두 번 열기 (Step 3: 구조만, Step 8: CSV 내용)
+    - 메모리에서만 처리, 디스크 저장 전에 오류 발견
+    """
+
+# ProgramUploadService 워크플로우 업데이트
+# Step 8: 매칭된 레더 CSV 파일 구조 검증 (메모리) - Phase 1.5 신규
+csv_structure_validation_result = self.file_validation_service.validate_matched_ladder_csv_structures_in_memory(
+    ladder_zip_file=pgm_ladder_zip_file,
+    matched_files=validation_result['matched_files']
+)
+
+logger.info(
+    f"✅ [Step 8] 레더 CSV 구조 검증 완료: "
+    f"{csv_structure_validation_result['validated_count']}개 파일 통과"
+)
+```
+
+**레더 CSV 파일 구조:**
+```
+Line 1: KV339_20231104                          # 파일 식별자
+Line 2: Module Type Information:,RCPU R08       # 모듈 정보
+Line 3: Step No.,Line Statement,Instruction,... # 헤더 (필수 컬럼)
+Line 4+: 실제 데이터
+```
+
+**검증 순서:**
+1. bytes → 문자열 디코딩 (환경변수 인코딩)
+2. StringIO로 메모리 파일 객체 생성
+3. 최소 줄 수 검증
+4. 파일 식별자 검증 (환경변수로 on/off)
+5. 모듈 정보 검증 (환경변수로 on/off)
+6. 필수 컬럼 검증 (환경변수 기반)
+7. 최소 데이터 행 수 검증
+
+**특징:**
+- 해결방안 C: ZIP을 두 번 열기
+  - Step 3: ZIP 구조만 확인 (파일 목록)
+  - Step 8: 매칭된 CSV만 내용 검증
+- 메모리에서만 처리, 디스크 저장 전에 오류 발견
+- 환경변수로 검증 규칙 제어 가능
+- chardet 라이브러리로 인코딩 자동 감지 (선택사항)
+- 하나라도 실패하면 전체 업로드 중단
+
+**작업 시간:** 2시간
+
+**다음 단계:** Phase 6 - 성능 최적화 (선택사항)
+
+---
+
+### 2025-11-06 - Phase 1 완료 ✅
+
+**작업 내용:**
+- ✅ FileValidationService 생성 (파일 검증 전담)
+- ✅ FileStorageService 생성 (파일 저장 전담)
+- ✅ ProgramDocumentProcessor 생성 (Strategy 패턴)
+
+**생성된 파일:**
+
+| 파일 | 경로 | 용도 |
+|------|------|------|
+| `file_validation_service.py` | `ai_backend/api/services/` | 파일 검증 전담 서비스 |
+| `file_storage_service.py` | `ai_backend/api/services/` | 파일 저장 전담 서비스 |
+| `program_document_processor.py` | `ai_backend/api/services/` | Strategy 패턴 문서 후처리 |
+
+**특징:**
+- 환경변수 기반 설정 사용 (`settings` 주입)
+- 명확한 책임 분리 (검증, 저장, 후처리)
+- Strategy 패턴으로 확장성 확보
+- 상세한 로깅 (`logger.info`, `logger.warning`)
+
+**작업 시간:** 2시간
+
+**다음 단계:** Phase 2 - DocumentService 단순화 ✅ **(완료!)**
+
+---
+
+### 2025-11-06 - Phase 0 완료 ✅
+
+**작업 내용:**
+- ✅ `simple_settings.py`에 프로그램 업로드 환경변수 11개 추가
+- ✅ 편의 메서드 6개 추가 (경로 생성, 크기 변환 등)
+- ✅ `.env.example` 파일 생성 (환경변수 템플릿)
+
+**추가된 환경변수:**
+```python
+# 파일 크기 제한
+pgm_ladder_zip_max_size: 100MB
+pgm_template_max_size: 10MB
+pgm_ladder_csv_max_size: 5MB
+
+# 문서 타입 (대문자 통일)
+pgm_ladder_csv_doctype: "PGM_LADDER_CSV"
+pgm_template_doctype: "PGM_TEMPLATE_FILE"
+pgm_ladder_zip_doctype: "PGM_LADDER_ZIP"
+
+# 디렉토리 구조
+pgm_ladder_dir_name: "ladder_files"
+pgm_template_dir_name: "template"
+pgm_zip_dir_name: "zip"
+
+# 기타
+pgm_template_required_columns: "Logic ID,Folder ID,Logic Name"
+pgm_keep_original_zip: True
+pgm_zip_extract_timeout: 300
+```
+
+**추가된 편의 메서드:**
+```python
+settings.get_pgm_ladder_zip_max_size_mb()     # MB 단위 변환
+settings.get_pgm_template_max_size_mb()       # MB 단위 변환
+settings.get_pgm_template_required_columns()  # 컬럼 리스트 변환
+settings.get_program_upload_dir(pgm_id)       # 루트 디렉토리 경로
+settings.get_ladder_files_dir(pgm_id)         # 레더 파일 경로
+settings.get_template_file_dir(pgm_id)        # 템플릿 파일 경로
+settings.get_zip_file_dir(pgm_id)             # ZIP 파일 경로
+```
+
+**파일 변경:**
+- 📝 `ai_backend/config/simple_settings.py` (환경변수 추가)
+- 📝 `.env.example` (신규 생성)
+
+**작업 시간:** 30분
+
+**다음 단계:** Phase 1 - 새 컴포넌트 생성 ✅ **(완료!)**
+
+---
+
+### 2025-11-06 - Phase 1 완료 ✅
+
+**작업 내용:**
+- ✅ `FileValidationService` 생성 (파일 검증 전담)
+- ✅ `FileStorageService` 생성 (파일 저장 전담)
+- ✅ `ProgramDocumentProcessor` 생성 (Strategy 패턴)
+
+**생성된 파일:**
+
+| 파일 | 경로 | 용도 |
+|------|------|------|
+| `file_validation_service.py` | `ai_backend/api/services/` | 파일 검증 전담 서비스 |
+| `file_storage_service.py` | `ai_backend/api/services/` | 파일 저장 전담 서비스 |
+| `program_document_processor.py` | `ai_backend/api/services/` | Strategy 패턴 문서 후처리 |
+
+**FileValidationService 주요 메서드:**
+```python
+- validate_ladder_zip_file_type()        # 레더 ZIP 타입 검증
+- validate_ladder_zip_file_size()        # 레더 ZIP 크기 검증
+- validate_ladder_zip_structure()        # ZIP 구조 검증
+- validate_template_file_type()          # 템플릿 타입 검증
+- validate_template_file_size()          # 템플릿 크기 검증
+- validate_template_file_structure()     # 템플릿 구조 검증
+- validate_ladder_files_match()          # 파일 매칭 검증
+- validate_ladder_filename_pattern()     # 파일명 패턴 검증
+```
+
+**FileStorageService 주요 메서드:**
+```python
+- save_and_extract_ladder_zip()          # 레더 ZIP 저장 및 압축 해제
+- save_template_file()                   # 템플릿 파일 저장
+- delete_program_files()                 # 프로그램 파일 삭제 (롤백)
+- delete_files()                         # 특정 파일 삭제 (롤백)
+```
+
+**ProgramDocumentProcessor 클래스:**
+```python
+- ProgramDocumentProcessor               # 추상 클래스 (ABC)
+- DefaultProgramDocumentProcessor        # 기본 프로세서 (후처리 없음)
+- ProgramTemplateProcessor               # 템플릿 프로세서 (파싱 + 저장)
+- ProgramDocumentProcessorFactory        # 프로세서 팩토리
+```
+
+**특징:**
+- 환경변수 기반 설정 사용 (`settings` 주입)
+- 명확한 책임 분리 (검증, 저장, 후처리)
+- Strategy 패턴으로 확장성 확보
+- 상세한 로깅 (`logger.info`, `logger.warning`)
+
+**작업 시간:** 2시간
+
+**다음 단계:** Phase 2 - DocumentService 단순화 ✅ **(완료!)**
+
+---
+
 ## 📑 목차
 1. [리팩토링 목표](#-리팩토링-목표)
 2. [현재 문제점 상세 분석](#-현재-문제점-상세-분석)
@@ -1793,14 +2336,15 @@ document_crud.bulk_create(10개)  # 1 * 100ms = 100ms
 - [ ] 환경변수 목록 작성
 
 ### 개발 중
-- [ ] Phase 0: 환경변수 설정
-- [ ] Phase 1: 새 컴포넌트 생성
-- [ ] Phase 2: DocumentService 단순화
-- [ ] Phase 3: ProgramUploadService 리팩토링
-- [ ] Phase 4: Router 및 Response 모델 업데이트
-- [ ] Phase 5: 레거시 코드 제거
-- [ ] Phase 6: 성능 최적화
-- [ ] Phase 7: 문서 업데이트
+- [x] Phase 0: 환경변수 설정 ✅ **(2025-11-06 완료)**
+- [x] Phase 1: 새 컴포넌트 생성 ✅ **(2025-11-06 완료)**
+- [x] Phase 1.5: 레더 CSV 구조 검증 추가 ✅ **(2025-11-06 완료)** ⭐ NEW
+- [x] Phase 2: DocumentService 단순화 ✅ **(2025-11-06 완료)**
+- [x] Phase 3: ProgramUploadService 리팩토링 ✅ **(2025-11-06 완룼)**
+- [x] Phase 4: Router 및 Response 모델 업데이트 ✅ **(2025-11-06 완료)**
+- [x] Phase 5: 레거시 코드 제거 ✅ **(2025-11-06 완료)** 🎉
+- [ ] Phase 6: 성능 최적화 (선택사항)
+- [ ] Phase 7: 문서 업데이트 (선택사항)
 
 ### 개발 후
 - [ ] 단위 테스트 80% 이상
@@ -1809,7 +2353,7 @@ document_crud.bulk_create(10개)  # 1 * 100ms = 100ms
 - [ ] 환경변수 문서 작성
 - [ ] 명명 규칙 가이드 작성
 - [ ] 코드 리뷰
-- [ ] .env.example 파일 생성
+- [x] .env.example 파일 생성 ✅ **(2025-11-06 완료)**
 - [ ] 스테이징 환경 배포
 - [ ] 프로덕션 배포
 
