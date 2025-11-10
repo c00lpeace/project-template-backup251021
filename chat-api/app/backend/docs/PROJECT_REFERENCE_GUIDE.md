@@ -70,6 +70,85 @@ class DocumentService(BaseDocumentService):
 
 ## ✨ 최근 변경사항
 
+### 2025-11-07 - PLC 일괄 매핑 API 추가 ⭐ NEW
+
+**요약:**
+- 복수 PLC에 프로그램 일괄 매핑/해제/변경 기능 구현
+- 트랜잭션 안전성 보장 (전체 롤백 또는 부분 성공 선택)
+- 개별 PLC별 성공/실패 상태 추적 및 반환
+
+**생성된 파일:**
+| 파일 | 경로 | 용도 |
+|------|------|------|
+| `plc_request.py` | `ai_backend/types/request/` | Bulk 요청 모델 추가 |
+| `plc_response.py` | `ai_backend/types/response/` | Bulk 응답 모델 추가 |
+| `plc_crud.py` | `ai_backend/database/crud/` | 일괄 처리 CRUD 메서드 |
+| `plc_service.py` | `ai_backend/api/services/` | 일괄 처리 서비스 로직 |
+| `plc_router.py` | `ai_backend/api/routers/` | 일괄 매핑 API 엔드포인트 |
+
+**API 엔드포인트:**
+```python
+POST   /plcs/mapping/bulk    # 복수 PLC 일괄 매핑
+DELETE /plcs/mapping/bulk    # 복수 PLC 일괄 해제
+PUT    /plcs/mapping/bulk    # 복수 PLC 일괄 변경
+```
+
+**주요 기능:**
+1. 최대 100개 PLC에 동시 매핑 가능
+2. rollback_on_error 옵션:
+   - `true`: 하나라도 실패하면 전체 롤백
+   - `false`: 성공한 것만 커밋 (부분 성공)
+3. 각 PLC별 성공/실패 상태 및 이유 반환
+4. 매핑 이력 자동 기록 (PGM_MAPPING_HISTORY)
+
+**사용 예시:**
+```python
+# 일괄 매핑
+POST /plcs/mapping/bulk
+{
+    "plc_ids": ["PLC01", "PLC02", "PLC03"],
+    "pgm_id": "PGM_1",
+    "user": "admin",
+    "notes": "테스트 환경 매핑",
+    "rollback_on_error": false  # 부분 성공 허용
+}
+
+# 응답
+{
+    "total": 3,
+    "success_count": 2,
+    "failure_count": 1,
+    "pgm_id": "PGM_1",
+    "results": [
+        {
+            "plc_id": "PLC01",
+            "success": true,
+            "message": "프로그램 'PGM_1' 매핑 성공",
+            "pgm_id": "PGM_1",
+            "prev_pgm_id": null
+        },
+        {
+            "plc_id": "PLC02",
+            "success": false,
+            "message": "PLC 'PLC02'를 찾을 수 없습니다.",
+            "pgm_id": null,
+            "prev_pgm_id": null
+        },
+        {
+            "plc_id": "PLC03",
+            "success": true,
+            "message": "프로그램 'PGM_1' 매핑 성곴",
+            "pgm_id": "PGM_1",
+            "prev_pgm_id": "PGM_OLD"
+        }
+    ],
+    "message": "3개 중 2개 성공, 1개 실패",
+    "rolled_back": false
+}
+```
+
+---
+
 ### 2025-11-05 - 프로그램 업로드 서비스 구현 (Phase 2 완료) ⭐ NEW
 
 **요약:**
@@ -251,6 +330,22 @@ migrations/
 
 ## 🔗 API 엔드포인트 요약
 
+### PLC 일괄 매핑 API ⭐ NEW (2025-11-07)
+```
+POST   /plcs/mapping/bulk    # 복수 PLC 일괄 매핑
+# 요청: plc_ids, pgm_id, user, notes, rollback_on_error
+# 응답: total, success_count, failure_count, results[]
+# 특징: 최대 100개 PLC, 부분 성공/전체 롤백 선택 가능
+
+DELETE /plcs/mapping/bulk    # 복수 PLC 일괄 해제
+# 요청: plc_ids, user, notes, rollback_on_error
+# 응답: total, success_count, failure_count, results[]
+
+PUT    /plcs/mapping/bulk    # 복수 PLC 일괄 변경
+# 요청: plc_ids, new_pgm_id, user, notes, rollback_on_error
+# 응답: total, success_count, failure_count, results[]
+```
+
 ### Program Upload API ⭐ NEW (Phase 2)
 ```
 POST /programs/upload  # 프로그램 파일 업로드 및 생성
@@ -293,6 +388,7 @@ Response: 추출 파일 목록 + 통계
 
 ## 🔍 빠른 검색 키워드
 
+- **PLC 일괄 매핑**: plc_crud.py (bulk_map_program, bulk_unmap_program, bulk_update_program) ⭐ NEW
 - **PGM_ID 생성**: sequence_service.py, sequence_crud.py, sequence_models.py ⭐
 - **프로그램 업로드**: program_upload_service.py, POST /programs/upload ⭐ NEW (Phase 2)
 - **ZIP 업로드**: document_service.py, upload_zip_document, save_extracted_file_to_db
