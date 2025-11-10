@@ -112,3 +112,91 @@ class UnmapProgramRequest(BaseModel):
         if not v.strip():
             raise ValueError('필드는 공백일 수 없습니다.')
         return v.strip()
+
+
+# ========== ✨ 일괄 매핑 관련 Request ==========
+
+class BulkMapProgramRequest(BaseModel):
+    """복수 PLC에 프로그램 일괄 매핑 요청"""
+    plc_ids: list[str] = Field(..., min_length=1, description="PLC ID 목록 (최대 100개)")
+    pgm_id: str = Field(..., min_length=1, max_length=50, description="프로그램 ID")
+    user: str = Field(..., min_length=1, max_length=50, description="작업자")
+    notes: Optional[str] = Field(None, max_length=500, description="비고")
+    rollback_on_error: bool = Field(False, description="에러 시 전체 롤백 여부 (기본: 부분 성공)")
+    
+    @field_validator('plc_ids')
+    @classmethod
+    def validate_plc_ids(cls, v):
+        if not v:
+            raise ValueError('PLC ID 목록은 비어있을 수 없습니다.')
+        if len(v) > 100:
+            raise ValueError('PLC ID는 최대 100개까지 지정할 수 있습니다.')
+        # 중복 제거
+        unique_ids = list(set(v))
+        if len(unique_ids) != len(v):
+            raise ValueError('중복된 PLC ID가 포함되어 있습니다.')
+        return unique_ids
+    
+    @field_validator('pgm_id', 'user')
+    @classmethod
+    def validate_not_empty(cls, v):
+        if not v.strip():
+            raise ValueError('필드는 공백일 수 없습니다.')
+        return v.strip()
+
+
+class BulkUnmapProgramRequest(BaseModel):
+    """복수 PLC의 프로그램 매핑 일괄 해제 요청"""
+    plc_ids: list[str] = Field(..., min_length=1, description="PLC ID 목록 (최대 100개)")
+    user: str = Field(..., min_length=1, max_length=50, description="작업자")
+    notes: Optional[str] = Field(None, max_length=500, description="비고")
+    rollback_on_error: bool = Field(False, description="에러 시 전체 롤백 여부 (기본: 부분 성공)")
+    
+    @field_validator('plc_ids')
+    @classmethod
+    def validate_plc_ids(cls, v):
+        if not v:
+            raise ValueError('PLC ID 목록은 비어있을 수 없습니다.')
+        if len(v) > 100:
+            raise ValueError('PLC ID는 최대 100개까지 지정할 수 있습니다.')
+        # 중복 제거
+        unique_ids = list(set(v))
+        if len(unique_ids) != len(v):
+            raise ValueError('중복된 PLC ID가 포함되어 있습니다.')
+        return unique_ids
+    
+    @field_validator('user')
+    @classmethod
+    def validate_not_empty(cls, v):
+        if not v.strip():
+            raise ValueError('필드는 공백일 수 없습니다.')
+        return v.strip()
+
+
+class BulkUpdateProgramRequest(BaseModel):
+    """복수 PLC의 프로그램 일괄 변경 요청"""
+    plc_ids: list[str] = Field(..., min_length=1, description="PLC ID 목록 (최대 100개)")
+    new_pgm_id: str = Field(..., min_length=1, max_length=50, description="새 프로그램 ID")
+    user: str = Field(..., min_length=1, max_length=50, description="작업자")
+    notes: Optional[str] = Field(None, max_length=500, description="비고")
+    rollback_on_error: bool = Field(False, description="에러 시 전체 롤백 여부 (기본: 부분 성공)")
+    
+    @field_validator('plc_ids')
+    @classmethod
+    def validate_plc_ids(cls, v):
+        if not v:
+            raise ValueError('PLC ID 목록은 비어있을 수 없습니다.')
+        if len(v) > 100:
+            raise ValueError('PLC ID는 최대 100개까지 지정할 수 있습니다.')
+        # 중복 제거
+        unique_ids = list(set(v))
+        if len(unique_ids) != len(v):
+            raise ValueError('중복된 PLC ID가 포함되어 있습니다.')
+        return unique_ids
+    
+    @field_validator('new_pgm_id', 'user')
+    @classmethod
+    def validate_not_empty(cls, v):
+        if not v.strip():
+            raise ValueError('필드는 공백일 수 없습니다.')
+        return v.strip()

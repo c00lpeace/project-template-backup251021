@@ -501,3 +501,316 @@ class PlcCrud:
         except Exception as e:
             logger.error(f"미매핑 PLC 조회 실패: {str(e)}")
             raise HandledException(ResponseCode.DATABASE_QUERY_ERROR, e=e)
+    
+    # ========== ✨ 일괄 매핑 관련 메서드 ==========
+    
+    def bulk_map_program(
+        self,
+        plc_ids: List[str],
+        pgm_id: str,
+        user: str,
+        notes: Optional[str] = None,
+        rollback_on_error: bool = False
+    ) -> dict:
+        """
+        복수 PLC에 프로그램 일괄 매핑
+        
+        Args:
+            plc_ids: PLC ID 목록
+            pgm_id: 프로그램 ID
+            user: 작업자
+            notes: 비고
+            rollback_on_error: True면 에러 시 전체 롤백, False면 부분 성공
+        
+        Returns:
+            dict: {
+                'success': List[dict],  # 성공 목록
+                'failed': List[dict],   # 실패 목록
+                'rolled_back': bool     # 롤백 여부
+            }
+        """
+        success_results = []
+        failed_results = []
+        rolled_back = False
+        
+        try:
+            for plc_id in plc_ids:
+                try:
+                    # 각 PLC에 대해 매핑 시도
+                    plc = self.get_plc(plc_id)
+                    if not plc:
+                        failed_results.append({
+                            'plc_id': plc_id,
+                            'message': f"PLC '{plc_id}'를 찾을 수 없습니다.",
+                            'pgm_id': None,
+                            'prev_pgm_id': None
+                        })
+                        if rollback_on_error:
+                            raise Exception(f"PLC '{plc_id}'를 찾을 수 없습니다.")
+                        continue
+                    
+                    prev_pgm_id = plc.pgm_id
+                    action = PgmMappingAction.CREATE if not prev_pgm_id else PgmMappingAction.UPDATE
+                    
+                    # PLC_MASTER 업데이트
+                    plc.pgm_id = pgm_id
+                    plc.pgm_mapping_dt = datetime.now()
+                    plc.pgm_mapping_user = user
+                    
+                    # 이력 기록
+                    history = PgmMappingHistory(
+                        plc_id=plc_id,
+                        pgm_id=pgm_id,
+                        action=action.value,
+                        action_dt=datetime.now(),
+                        action_user=user,
+                        prev_pgm_id=prev_pgm_id,
+                        notes=notes
+                    )
+                    self.db.add(history)
+                    
+                    success_results.append({
+                        'plc_id': plc_id,
+                        'message': f"프로그램 '{pgm_id}' 매핑 성공",
+                        'pgm_id': pgm_id,
+                        'prev_pgm_id': prev_pgm_id
+                    })
+                    
+                except Exception as plc_error:
+                    error_msg = f"매핑 실패: {str(plc_error)}"
+                    logger.warning(f"PLC '{plc_id}' 매핑 실패: {error_msg}")
+                    
+                    failed_results.append({
+                        'plc_id': plc_id,
+                        'message': error_msg,
+                        'pgm_id': None,
+                        'prev_pgm_id': None
+                    })
+                    
+                    if rollback_on_error:
+                        raise
+            
+            # 커밋 또는 롤백
+            if rollback_on_error and failed_results:
+                self.db.rollback()
+                rolled_back = True
+                logger.warning(f"일괄 매핑 실패로 인한 롤백: {len(failed_results)}개 실패")
+            else:
+                self.db.commit()
+                logger.info(f"일괄 매핑 완료: 성공={len(success_results)}, 실패={len(failed_results)}")
+            
+            return {
+                'success': success_results,
+                'failed': failed_results,
+                'rolled_back': rolled_back
+            }
+            
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"일괄 매핑 중 오류 발생: {str(e)}")
+            raise HandledException(ResponseCode.DATABASE_QUERY_ERROR, e=e)
+    
+    def bulk_unmap_program(
+        self,
+        plc_ids: List[str],
+        user: str,
+        notes: Optional[str] = None,
+        rollback_on_error: bool = False
+    ) -> dict:
+        """
+        복수 PLC의 프로그램 매핑 일괄 해제
+        
+        Returns:
+            dict: {
+                'success': List[dict],
+                'failed': List[dict],
+                'rolled_back': bool
+            }
+        """
+        success_results = []
+        failed_results = []
+        rolled_back = False
+        
+        try:
+            for plc_id in plc_ids:
+                try:
+                    plc = self.get_plc(plc_id)
+                    if not plc:
+                        failed_results.append({
+                            'plc_id': plc_id,
+                            'message': f"PLC '{plc_id}'를 찾을 수 없습니다.",
+                            'pgm_id': None,
+                            'prev_pgm_id': None
+                        })
+                        if rollback_on_error:
+                            raise Exception(f"PLC '{plc_id}'를 찾을 수 없습니다.")
+                        continue
+                    
+                    if not plc.pgm_id:
+                        failed_results.append({
+                            'plc_id': plc_id,
+                            'message': "매핑된 프로그램이 없습니다.",
+                            'pgm_id': None,
+                            'prev_pgm_id': None
+                        })
+                        if rollback_on_error:
+                            raise Exception("매핑된 프로그램이 없습니다.")
+                        continue
+                    
+                    prev_pgm_id = plc.pgm_id
+                    
+                    # PLC_MASTER 업데이트
+                    plc.pgm_id = None
+                    plc.pgm_mapping_dt = datetime.now()
+                    plc.pgm_mapping_user = user
+                    plc.update_dt = datetime.now()
+                    
+                    # 이력 기록
+                    history = PgmMappingHistory(
+                        plc_id=plc_id,
+                        pgm_id=None,
+                        action=PgmMappingAction.DELETE.value,
+                        action_dt=datetime.now(),
+                        action_user=user,
+                        prev_pgm_id=prev_pgm_id,
+                        notes=notes
+                    )
+                    self.db.add(history)
+                    
+                    success_results.append({
+                        'plc_id': plc_id,
+                        'message': "프로그램 매핑 해제 성공",
+                        'pgm_id': None,
+                        'prev_pgm_id': prev_pgm_id
+                    })
+                    
+                except Exception as plc_error:
+                    error_msg = f"매핑 해제 실패: {str(plc_error)}"
+                    logger.warning(f"PLC '{plc_id}' 매핑 해제 실패: {error_msg}")
+                    
+                    failed_results.append({
+                        'plc_id': plc_id,
+                        'message': error_msg,
+                        'pgm_id': None,
+                        'prev_pgm_id': None
+                    })
+                    
+                    if rollback_on_error:
+                        raise
+            
+            if rollback_on_error and failed_results:
+                self.db.rollback()
+                rolled_back = True
+                logger.warning(f"일괄 매핑 해제 실패로 인한 롤백: {len(failed_results)}개 실패")
+            else:
+                self.db.commit()
+                logger.info(f"일괄 매핑 해제 완료: 성공={len(success_results)}, 실패={len(failed_results)}")
+            
+            return {
+                'success': success_results,
+                'failed': failed_results,
+                'rolled_back': rolled_back
+            }
+            
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"일괄 매핑 해제 중 오류 발생: {str(e)}")
+            raise HandledException(ResponseCode.DATABASE_QUERY_ERROR, e=e)
+    
+    def bulk_update_program(
+        self,
+        plc_ids: List[str],
+        new_pgm_id: str,
+        user: str,
+        notes: Optional[str] = None,
+        rollback_on_error: bool = False
+    ) -> dict:
+        """
+        복수 PLC의 프로그램 일괄 변경
+        
+        Returns:
+            dict: {
+                'success': List[dict],
+                'failed': List[dict],
+                'rolled_back': bool
+            }
+        """
+        success_results = []
+        failed_results = []
+        rolled_back = False
+        
+        try:
+            for plc_id in plc_ids:
+                try:
+                    plc = self.get_plc(plc_id)
+                    if not plc:
+                        failed_results.append({
+                            'plc_id': plc_id,
+                            'message': f"PLC '{plc_id}'를 찾을 수 없습니다.",
+                            'pgm_id': None,
+                            'prev_pgm_id': None
+                        })
+                        if rollback_on_error:
+                            raise Exception(f"PLC '{plc_id}'를 찾을 수 없습니다.")
+                        continue
+                    
+                    prev_pgm_id = plc.pgm_id
+                    
+                    # PLC_MASTER 업데이트
+                    plc.pgm_id = new_pgm_id
+                    plc.pgm_mapping_dt = datetime.now()
+                    plc.pgm_mapping_user = user
+                    plc.update_dt = datetime.now()
+                    
+                    # 이력 기록
+                    action = PgmMappingAction.CREATE if not prev_pgm_id else PgmMappingAction.UPDATE
+                    history = PgmMappingHistory(
+                        plc_id=plc_id,
+                        pgm_id=new_pgm_id,
+                        action=action.value,
+                        action_dt=datetime.now(),
+                        action_user=user,
+                        prev_pgm_id=prev_pgm_id,
+                        notes=notes
+                    )
+                    self.db.add(history)
+                    
+                    success_results.append({
+                        'plc_id': plc_id,
+                        'message': f"프로그램 '{new_pgm_id}'로 변경 성공",
+                        'pgm_id': new_pgm_id,
+                        'prev_pgm_id': prev_pgm_id
+                    })
+                    
+                except Exception as plc_error:
+                    error_msg = f"프로그램 변경 실패: {str(plc_error)}"
+                    logger.warning(f"PLC '{plc_id}' 프로그램 변경 실패: {error_msg}")
+                    
+                    failed_results.append({
+                        'plc_id': plc_id,
+                        'message': error_msg,
+                        'pgm_id': None,
+                        'prev_pgm_id': None
+                    })
+                    
+                    if rollback_on_error:
+                        raise
+            
+            if rollback_on_error and failed_results:
+                self.db.rollback()
+                rolled_back = True
+                logger.warning(f"일괄 프로그램 변경 실패로 인한 롤백: {len(failed_results)}개 실패")
+            else:
+                self.db.commit()
+                logger.info(f"일괄 프로그램 변경 완료: 성공={len(success_results)}, 실패={len(failed_results)}")
+            
+            return {
+                'success': success_results,
+                'failed': failed_results,
+                'rolled_back': rolled_back
+            }
+            
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"일괄 프로그램 변경 중 오류 발생: {str(e)}")
+            raise HandledException(ResponseCode.DATABASE_QUERY_ERROR, e=e)

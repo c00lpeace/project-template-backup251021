@@ -10,7 +10,10 @@ from ai_backend.types.request.plc_request import (
     PlcSearchRequest,
     PlcHierarchyRequest,
     MapProgramRequest,
-    UnmapProgramRequest
+    UnmapProgramRequest,
+    BulkMapProgramRequest,
+    BulkUnmapProgramRequest,
+    BulkUpdateProgramRequest
 )
 from ai_backend.types.response.plc_response import (
     PlcResponse,
@@ -26,7 +29,11 @@ from ai_backend.types.response.plc_response import (
     PlcWithMappingResponse,
     MapProgramResponse,
     UnmapProgramResponse,
-    UnmappedPlcsResponse
+    UnmappedPlcsResponse,
+    BulkMapProgramResponse,
+    BulkUnmapProgramResponse,
+    BulkUpdateProgramResponse,
+    BulkMappingResultItem
 )
 from typing import Optional
 import logging
@@ -358,3 +365,232 @@ def get_plc_tree(
     logger.info(f"PLC 계층 구조 조회 요청: is_active={is_active}")
     result = plc_service.get_plc_hierarchy(is_active=is_active)
     return result
+
+
+# ========== ✨ 일괄 매핑 API ==========
+
+@router.post("/plcs/mapping/bulk", response_model=BulkMapProgramResponse, status_code=status.HTTP_200_OK)
+def bulk_map_program(
+    request: BulkMapProgramRequest,
+    plc_service: PlcService = Depends(get_plc_service)
+):
+    """
+    복수 PLC에 프로그램 일괄 매핑
+    
+    - **plc_ids**: 매핑할 PLC ID 목록 (최대 100개)
+    - **pgm_id**: 매핑할 프로그램 ID
+    - **user**: 작업자
+    - **notes**: 비고 (선택)
+    - **rollback_on_error**: 에러 시 전체 롤백 여부 (기본: False)
+      - True: 하나라도 실패하면 전체 롤백
+      - False: 성공한 것만 커밋 (부분 성공)
+    
+    **반환 예시:**
+    ```json
+    {
+        "total": 3,
+        "success_count": 2,
+        "failure_count": 1,
+        "pgm_id": "PGM_1",
+        "results": [
+            {
+                "plc_id": "PLC01",
+                "success": true,
+                "message": "프로그램 'PGM_1' 매핑 성공",
+                "pgm_id": "PGM_1",
+                "prev_pgm_id": null
+            },
+            {
+                "plc_id": "PLC02",
+                "success": false,
+                "message": "PLC 'PLC02'를 찾을 수 없습니다.",
+                "pgm_id": null,
+                "prev_pgm_id": null
+            }
+        ],
+        "message": "3개 중 2개 성공, 1개 실패",
+        "rolled_back": false
+    }
+    ```
+    """
+    logger.info(f"일괄 매핑 요청: plc_ids={request.plc_ids}, pgm_id={request.pgm_id}")
+    
+    result = plc_service.bulk_map_program_to_plcs(
+        plc_ids=request.plc_ids,
+        pgm_id=request.pgm_id,
+        user=request.user,
+        notes=request.notes,
+        rollback_on_error=request.rollback_on_error
+    )
+    
+    # 결과 변환
+    success_count = len(result['success'])
+    failure_count = len(result['failed'])
+    total = success_count + failure_count
+    
+    # 결과 항목 변환
+    results = []
+    for item in result['success']:
+        results.append(BulkMappingResultItem(
+            plc_id=item['plc_id'],
+            success=True,
+            message=item['message'],
+            pgm_id=item['pgm_id'],
+            prev_pgm_id=item['prev_pgm_id']
+        ))
+    
+    for item in result['failed']:
+        results.append(BulkMappingResultItem(
+            plc_id=item['plc_id'],
+            success=False,
+            message=item['message'],
+            pgm_id=item.get('pgm_id'),
+            prev_pgm_id=item.get('prev_pgm_id')
+        ))
+    
+    # 메시지 생성
+    if result['rolled_back']:
+        message = f"에러 발생으로 인해 전체 롤백되었습니다. (실패: {failure_count}개)"
+    elif failure_count == 0:
+        message = f"모두 성공적으로 매핑되었습니다. (성공: {success_count}개)"
+    else:
+        message = f"{total}개 중 {success_count}개 성공, {failure_count}개 실패"
+    
+    return BulkMapProgramResponse(
+        total=total,
+        success_count=success_count,
+        failure_count=failure_count,
+        pgm_id=request.pgm_id,
+        results=results,
+        message=message,
+        rolled_back=result['rolled_back']
+    )
+
+
+@router.delete("/plcs/mapping/bulk", response_model=BulkUnmapProgramResponse, status_code=status.HTTP_200_OK)
+def bulk_unmap_program(
+    request: BulkUnmapProgramRequest,
+    plc_service: PlcService = Depends(get_plc_service)
+):
+    """
+    복수 PLC의 프로그램 매핑 일괄 해제
+    
+    - **plc_ids**: 매핑 해제할 PLC ID 목록 (최대 100개)
+    - **user**: 작업자
+    - **notes**: 비고 (선택)
+    - **rollback_on_error**: 에러 시 전체 롤백 여부
+    """
+    logger.info(f"일괄 매핑 해제 요청: plc_ids={request.plc_ids}")
+    
+    result = plc_service.bulk_unmap_program_from_plcs(
+        plc_ids=request.plc_ids,
+        user=request.user,
+        notes=request.notes,
+        rollback_on_error=request.rollback_on_error
+    )
+    
+    # 결과 변환
+    success_count = len(result['success'])
+    failure_count = len(result['failed'])
+    total = success_count + failure_count
+    
+    results = []
+    for item in result['success']:
+        results.append(BulkMappingResultItem(
+            plc_id=item['plc_id'],
+            success=True,
+            message=item['message'],
+            pgm_id=item['pgm_id'],
+            prev_pgm_id=item['prev_pgm_id']
+        ))
+    
+    for item in result['failed']:
+        results.append(BulkMappingResultItem(
+            plc_id=item['plc_id'],
+            success=False,
+            message=item['message'],
+            pgm_id=item.get('pgm_id'),
+            prev_pgm_id=item.get('prev_pgm_id')
+        ))
+    
+    if result['rolled_back']:
+        message = f"에러 발생으로 인해 전체 롤백되었습니다. (실패: {failure_count}개)"
+    elif failure_count == 0:
+        message = f"모두 성공적으로 매핑 해제되었습니다. (성공: {success_count}개)"
+    else:
+        message = f"{total}개 중 {success_count}개 성공, {failure_count}개 실패"
+    
+    return BulkUnmapProgramResponse(
+        total=total,
+        success_count=success_count,
+        failure_count=failure_count,
+        results=results,
+        message=message,
+        rolled_back=result['rolled_back']
+    )
+
+
+@router.put("/plcs/mapping/bulk", response_model=BulkUpdateProgramResponse, status_code=status.HTTP_200_OK)
+def bulk_update_program(
+    request: BulkUpdateProgramRequest,
+    plc_service: PlcService = Depends(get_plc_service)
+):
+    """
+    복수 PLC의 프로그램 일괄 변경
+    
+    - **plc_ids**: 프로그램을 변경할 PLC ID 목록 (최대 100개)
+    - **new_pgm_id**: 새로운 프로그램 ID
+    - **user**: 작업자
+    - **notes**: 비고 (선택)
+    - **rollback_on_error**: 에러 시 전체 롤백 여부
+    """
+    logger.info(f"일괄 프로그램 변경 요청: plc_ids={request.plc_ids}, new_pgm_id={request.new_pgm_id}")
+    
+    result = plc_service.bulk_update_program_mapping(
+        plc_ids=request.plc_ids,
+        new_pgm_id=request.new_pgm_id,
+        user=request.user,
+        notes=request.notes,
+        rollback_on_error=request.rollback_on_error
+    )
+    
+    # 결과 변환
+    success_count = len(result['success'])
+    failure_count = len(result['failed'])
+    total = success_count + failure_count
+    
+    results = []
+    for item in result['success']:
+        results.append(BulkMappingResultItem(
+            plc_id=item['plc_id'],
+            success=True,
+            message=item['message'],
+            pgm_id=item['pgm_id'],
+            prev_pgm_id=item['prev_pgm_id']
+        ))
+    
+    for item in result['failed']:
+        results.append(BulkMappingResultItem(
+            plc_id=item['plc_id'],
+            success=False,
+            message=item['message'],
+            pgm_id=item.get('pgm_id'),
+            prev_pgm_id=item.get('prev_pgm_id')
+        ))
+    
+    if result['rolled_back']:
+        message = f"에러 발생으로 인해 전체 롤백되었습니다. (실패: {failure_count}개)"
+    elif failure_count == 0:
+        message = f"모두 성공적으로 프로그램이 변경되었습니다. (성공: {success_count}개)"
+    else:
+        message = f"{total}개 중 {success_count}개 성공, {failure_count}개 실패"
+    
+    return BulkUpdateProgramResponse(
+        total=total,
+        success_count=success_count,
+        failure_count=failure_count,
+        new_pgm_id=request.new_pgm_id,
+        results=results,
+        message=message,
+        rolled_back=result['rolled_back']
+    )

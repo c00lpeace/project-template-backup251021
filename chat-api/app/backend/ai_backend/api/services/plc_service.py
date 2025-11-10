@@ -64,6 +64,94 @@ class PlcService:
         except Exception as e:
             raise HandledException(ResponseCode.UNDEFINED_ERROR, e=e)
     
+    # ========== ✨ 일괄 매핑 관련 메서드 ==========
+    
+    def bulk_map_program_to_plcs(
+        self,
+        plc_ids: List[str],
+        pgm_id: str,
+        user: str,
+        notes: Optional[str] = None,
+        rollback_on_error: bool = False
+    ) -> dict:
+        """
+        복수 PLC에 프로그램 일괄 매핑
+        
+        Args:
+            plc_ids: PLC ID 목록
+            pgm_id: 프로그램 ID
+            user: 작업자
+            notes: 비고
+            rollback_on_error: True면 에러 시 전체 롤백, False면 부분 성공
+        
+        Returns:
+            dict: 매핑 결과 (성공/실패 목록)
+        """
+        try:
+            return self.plc_crud.bulk_map_program(
+                plc_ids=plc_ids,
+                pgm_id=pgm_id,
+                user=user,
+                notes=notes,
+                rollback_on_error=rollback_on_error
+            )
+        except HandledException:
+            raise
+        except Exception as e:
+            raise HandledException(ResponseCode.UNDEFINED_ERROR, e=e)
+    
+    def bulk_unmap_program_from_plcs(
+        self,
+        plc_ids: List[str],
+        user: str,
+        notes: Optional[str] = None,
+        rollback_on_error: bool = False
+    ) -> dict:
+        """
+        복수 PLC의 프로그램 매핑 일괄 해제
+        
+        Returns:
+            dict: 매핑 해제 결과
+        """
+        try:
+            return self.plc_crud.bulk_unmap_program(
+                plc_ids=plc_ids,
+                user=user,
+                notes=notes,
+                rollback_on_error=rollback_on_error
+            )
+        except HandledException:
+            raise
+        except Exception as e:
+            raise HandledException(ResponseCode.UNDEFINED_ERROR, e=e)
+    
+    def bulk_update_program_mapping(
+        self,
+        plc_ids: List[str],
+        new_pgm_id: str,
+        user: str,
+        notes: Optional[str] = None,
+        rollback_on_error: bool = False
+    ) -> dict:
+        """
+        복수 PLC의 프로그램 일괄 변경
+        
+        Returns:
+            dict: 프로그램 변경 결과
+        """
+        try:
+            return self.plc_crud.bulk_update_program(
+                plc_ids=plc_ids,
+                new_pgm_id=new_pgm_id,
+                user=user,
+                notes=notes,
+                rollback_on_error=rollback_on_error
+            )
+        except HandledException:
+            raise
+        except Exception as e:
+            raise HandledException(ResponseCode.UNDEFINED_ERROR, e=e)
+    
     def get_plc(self, plc_id: str, include_deleted: bool = False):
         """PLC 조회"""
         try:

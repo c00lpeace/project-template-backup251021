@@ -158,3 +158,39 @@ class UnmappedPlcsResponse(BaseModel):
     """미매핑 PLC 목록 응답"""
     total: int = Field(..., description="전체 미매핑 PLC 개수")
     items: List[PlcWithMappingResponse] = Field(..., description="미매핑 PLC 목록")
+
+
+# ========== ✨ 일괄 매핑 관련 Response ==========
+
+class BulkMappingResultItem(BaseModel):
+    """일괄 매핑 처리 결과 항목"""
+    plc_id: str = Field(..., description="PLC ID")
+    success: bool = Field(..., description="성공 여부")
+    message: str = Field(..., description="처리 결과 메시지")
+    pgm_id: Optional[str] = Field(None, description="매핑된 프로그램 ID")
+    prev_pgm_id: Optional[str] = Field(None, description="이전 프로그램 ID")
+
+
+class BulkMappingResponse(BaseModel):
+    """일괄 매핑 응답"""
+    total: int = Field(..., description="전체 요청 개수")
+    success_count: int = Field(..., description="성공 개수")
+    failure_count: int = Field(..., description="실패 개수")
+    results: List[BulkMappingResultItem] = Field(..., description="개별 처리 결과")
+    message: str = Field(..., description="전체 처리 결과 메시지")
+    rolled_back: bool = Field(False, description="롤백 여부")
+
+
+class BulkMapProgramResponse(BulkMappingResponse):
+    """일괄 프로그램 매핑 응답"""
+    pgm_id: str = Field(..., description="매핑한 프로그램 ID")
+
+
+class BulkUnmapProgramResponse(BulkMappingResponse):
+    """일괄 프로그램 매핑 해제 응답"""
+    pass
+
+
+class BulkUpdateProgramResponse(BulkMappingResponse):
+    """일괄 프로그램 변경 응답"""
+    new_pgm_id: str = Field(..., description="변경한 프로그램 ID")
