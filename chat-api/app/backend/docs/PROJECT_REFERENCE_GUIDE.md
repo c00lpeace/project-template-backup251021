@@ -1,6 +1,6 @@
 # 🏗️ PLC-Program Mapping System - 프로젝트 참조 가이드
 
-> **최종 업데이트:** 2025-11-12 (화요일) - 파일 검증 API 추가! 🎉  
+> **최종 업데이트:** 2025-11-12 (화요일) - API 정의서 작성 완료! 🎉  
 > **목적:** Claude가 매번 파일을 검색하지 않고 빠르게 프로젝트 구조를 파악하기 위한 참조 문서
 
 ---
@@ -70,7 +70,66 @@ class DocumentService(BaseDocumentService):
 
 ## ✨ 최근 변경사항
 
-### 2025-11-12 - 파일 검증 API 추가 ⭐ NEW
+### 2025-11-12 - API 정의서 작성 완료 ⭐ NEW
+
+**요약:**
+- 전체 API 엔드포인트 문서화 완료
+- 요청/응답 예시 포함
+- 6개 카테고리로 분류 (PLC, 프로그램, 템플릿, 문서, 매핑 이력, 캐시)
+
+**문서 위치:**
+- `docs/API_DOCUMENTATION.md`
+
+**문서화된 API:**
+1. **PLC 관리 API (17개)**
+   - PLC CRUD (생성, 조회, 수정, 삭제, 복원)
+   - PLC 검색, 개수 조회, 존재 확인
+   - 계층 구조 조회 (트리, 계층별 값)
+   - 프로그램 매핑 (단일/일괄)
+   - 프로그램 매핑 해제 (단일/일괄)
+   - 프로그램 일괄 변경
+
+2. **프로그램 관리 API (7개)**
+   - 프로그램 CRUD
+   - 프로그램별 매핑 PLC 목록 조회
+   - 프로그램 파일 업로드 (PGM_ID 자동 생성)
+
+3. **템플릿 관리 API (5개)**
+   - 템플릿 트리 구조 조회
+   - 템플릿 목록 조회 (검색, 페이징)
+   - 템플릿 삭제
+   - 템플릿 요약 정보 조회
+   - 템플릿 개수 조회
+
+4. **문서 관리 API (8개)**
+   - 문서 업로드 (일반 파일)
+   - 문서 CRUD
+   - ZIP 파일 업로드 (압축 해제 및 저장)
+   - ZIP 내부 파일 목록 조회
+   - ZIP 내부 파일 추출
+
+5. **매핑 이력 관리 API (6개)**
+   - PLC별 매핑 이력 조회
+   - 프로그램별 매핑 이력 조회
+   - 사용자별 매핑 이력 조회
+   - 최근 매핑 이력 조회
+   - PLC 이력 통계 조회
+   - 이력 단일 조회
+
+6. **캐시 관리 API (2개)**
+   - 캐시 상태 조회
+   - 캐시 초기화
+
+**문서 특징:**
+- 아이콘 미사용
+- 간결하고 명확한 설명
+- 모든 엔드포인트에 요청/응답 예시 포함
+- 에러 응답 포맷 정의
+- 페이지네이션 가이드 포함
+
+---
+
+### 2025-11-12 - 파일 검증 API 추가 (미구현)
 
 **요약:**
 - 프로그램 파일(레더 ZIP, 템플릿 XLSX, 커멘트 CSV) 검증 API 구현
@@ -108,60 +167,9 @@ GET  /validation/test-page       # 검증 테스트 HTML 페이지
 3. **의존성 관리**: 이전 단계 실패 시 자동 스킵
 4. **사용자 친화적 포맷**: 아이콘 + 한글 메시지
 
-**사용 예시:**
-```python
-# 검증 API 호출
-POST /validation/program-files
-Content-Type: multipart/form-data
-
-ladder_zip: [file]
-template_xlsx: [file]
-comment_csv: [file]
-collect_all_errors: true
-
-# 응답
-{
-    "validation_passed": false,
-    "summary": {
-        "total_steps": 6,
-        "passed": 3,
-        "failed": 1,
-        "skipped": 2
-    },
-    "steps": [
-        {
-            "order": 1,
-            "name": "파일 타입 검증",
-            "status": "success",
-            "passed": true,
-            "errors": [],
-            "details": {
-                "ladder_zip": "통과",
-                "template_xlsx": "통과",
-                "comment_csv": "통과"
-            }
-        },
-        {
-            "order": 2,
-            "name": "템플릿 파일 구조 검증",
-            "status": "failed",
-            "passed": false,
-            "errors": [
-                "누락된 컨럼: Logic ID, Logic Name"
-            ],
-            "details": null
-        }
-        // ... 나머지 단계
-    ],
-    "message": "⚠️ 일부 검증 단계에서 문제가 발견되었습니다.",
-    "formatted_report": "..." // 텍스트 포맷 리포트
-}
-```
-
-**테스트 페이지:**
-- URL: `http://localhost:8000/v1/validation/test-page`
-- 기능: 파일 업로드 폼 + 검증 결과 시각화
-- 디자인: 심플하고 미니멀한 스타일
+**참고:**
+- 현재 프로젝트에 validation_router.py 파일이 없음
+- 문서상으로만 명세되어 있음 (미구현 상태)
 
 ---
 
@@ -499,16 +507,21 @@ Response: 추출 파일 목록 + 통계
 1. **PROJECT_REFERENCE_GUIDE.md** (현재 문서)
    - 프로젝트 전체 개요
 
-2. **DATABASE_SCHEMA_REFERENCE.md**
+2. **API_DOCUMENTATION.md** ⭐ NEW (2025-11-12)
+   - 전체 API 엔드포인트 정의서
+   - 요청/응답 예시 포함
+   - 45개 API 엔드포인트 문서화
+
+3. **DATABASE_SCHEMA_REFERENCE.md**
    - 테이블 스키마 상세
 
-3. **CREATE_PROGRAM_LOGIC_PLAN.md** ⭐ NEW
+4. **CREATE_PROGRAM_LOGIC_PLAN.md**
    - 프로그램 생성 프로세스 상세 설계
 
-4. **ZIP_UPLOAD_CHANGES_20251105.md**
+5. **ZIP_UPLOAD_CHANGES_20251105.md**
    - ZIP 업로드 최신 변경사항 상세
 
-5. **SHARED_CORE_INTEGRATION_PLAN.md**
+6. **SHARED_CORE_INTEGRATION_PLAN.md**
    - shared_core 통합 계획
 
 ---
