@@ -1,6 +1,6 @@
 # 🏗️ PLC-Program Mapping System - 프로젝트 참조 가이드
 
-> **최종 업데이트:** 2025-11-05 (화요일) - Phase 2 완료! 🎉  
+> **최종 업데이트:** 2025-11-12 (화요일) - 파일 검증 API 추가! 🎉  
 > **목적:** Claude가 매번 파일을 검색하지 않고 빠르게 프로젝트 구조를 파악하기 위한 참조 문서
 
 ---
@@ -69,6 +69,101 @@ class DocumentService(BaseDocumentService):
 ---
 
 ## ✨ 최근 변경사항
+
+### 2025-11-12 - 파일 검증 API 추가 ⭐ NEW
+
+**요약:**
+- 프로그램 파일(레더 ZIP, 템플릿 XLSX, 커멘트 CSV) 검증 API 구현
+- 단계별 에러 수집 기능 (Collect-All-Errors 패턴)
+- 사용자 친화적인 검증 결과 포맷
+- 간단한 테스트 프론트엔드 포함
+
+**생성된 파일:**
+| 파일 | 경로 | 용도 |
+|------|------|------|
+| `validation_request.py` | `ai_backend/types/request/` | 검증 요청 모델 |
+| `validation_response.py` | `ai_backend/types/response/` | 검증 응답 모델 |
+| `validation_service.py` | `ai_backend/api/services/` | 검증 비지니스 로직 |
+| `validation_router.py` | `ai_backend/api/routers/` | 검증 API 엔드포인트 |
+
+**API 엔드포인트:**
+```python
+POST /validation/program-files  # 프로그램 파일 검증
+GET  /validation/test-page       # 검증 테스트 HTML 페이지
+```
+
+**검증 단계:**
+1. 파일 타입 검증 (확장자 확인)
+2. 템플릿 파일 구조 검증 (필수 컨럼, Logic ID)
+3. 레더 ZIP 파일 구조 검증 (무결성, 파일 목록)
+4. 파일 매칭 검증 (Logic ID vs ZIP 파일)
+5. 레더 CSV 구조 검증 (필수 컨럼)
+6. 커멘트 파일 구조 검증
+
+**주요 기능:**
+1. **Collect-All-Errors 모드**: 모든 단계를 실행하고 에러를 수집
+   - `collect_all_errors=true`: 모든 단계 실행 (권장)
+   - `collect_all_errors=false`: 첫 에러에서 중단
+2. **단계별 상태 추적**: success, failed, skipped
+3. **의존성 관리**: 이전 단계 실패 시 자동 스킵
+4. **사용자 친화적 포맷**: 아이콘 + 한글 메시지
+
+**사용 예시:**
+```python
+# 검증 API 호출
+POST /validation/program-files
+Content-Type: multipart/form-data
+
+ladder_zip: [file]
+template_xlsx: [file]
+comment_csv: [file]
+collect_all_errors: true
+
+# 응답
+{
+    "validation_passed": false,
+    "summary": {
+        "total_steps": 6,
+        "passed": 3,
+        "failed": 1,
+        "skipped": 2
+    },
+    "steps": [
+        {
+            "order": 1,
+            "name": "파일 타입 검증",
+            "status": "success",
+            "passed": true,
+            "errors": [],
+            "details": {
+                "ladder_zip": "통과",
+                "template_xlsx": "통과",
+                "comment_csv": "통과"
+            }
+        },
+        {
+            "order": 2,
+            "name": "템플릿 파일 구조 검증",
+            "status": "failed",
+            "passed": false,
+            "errors": [
+                "누락된 컨럼: Logic ID, Logic Name"
+            ],
+            "details": null
+        }
+        // ... 나머지 단계
+    ],
+    "message": "⚠️ 일부 검증 단계에서 문제가 발견되었습니다.",
+    "formatted_report": "..." // 텍스트 포맷 리포트
+}
+```
+
+**테스트 페이지:**
+- URL: `http://localhost:8000/v1/validation/test-page`
+- 기능: 파일 업로드 폼 + 검증 결과 시각화
+- 디자인: 심플하고 미니멀한 스타일
+
+---
 
 ### 2025-11-07 - PLC 일괄 매핑 API 추가 ⭐ NEW
 

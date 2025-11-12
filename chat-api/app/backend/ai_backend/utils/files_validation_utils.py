@@ -31,7 +31,7 @@ class FileValidationUtils:
         comment_csv_path: str,
     ) -> Dict:
         """
-        (테스트)프로그램 파일 검증
+        (테스트)프로그램 파일 검증 - 모든 단계를 실행하고 결과를 수집
         
         Args:
             ladder_zip_path: 레더 CSV 파일들이 압축된 ZIP파일 경로
@@ -40,93 +40,172 @@ class FileValidationUtils:
             
         Returns:
             {
-                'program': Program,
-                'pgm_id': str,
-                'validation_result': Dict,
-                'saved_files': Dict,
-                'message': str
+                'validation_passed': bool,
+                'validation_results': [  # 각 단계별 결과
+                    {
+                        'title': str,
+                        'is_valid': bool,
+                        'errors': List[str]
+                    }
+                ]
             }
         """
+        validation_results = []
+        
+        # 각 단계의 데이터를 저장할 변수들
+        template_data = None
+        ladder_zip_data = None
+        matched_files_data = None
+        
         try:
             # 0. UploadFile 객체 생성
+            logger.info("[Step 0] UploadFile 객체 생성")
             ladder_zip = self.file_path_to_upload_file(ladder_zip_path)
             template_xlsx = self.file_path_to_upload_file(template_xlsx_path)
             comment_csv = self.file_path_to_upload_file(comment_csv_path)
             
-            logger.info(f"[Step 0] UploadFile 객체 생성")
+            # Step 1: 파일 타입 검증
+            logger.info("[Step 1] 파일 타입 검증 시작")
             
-            # 1. 파일 타입 검증
-            validation_errors = {}
-            logger.info(f"[Step 1] 파일 타입 검증 시작")
-            ladder_zip_file_validation = self.validate_ladder_zip_file_type(ladder_zip)
-            if ladder_zip_file_validation["is_valid"] is False:
-                validation_errors['ladder_zip'] = ladder_zip_file_validation["error_message"]
-            template_file_validation = self.validate_template_file_type(template_xlsx)
-            if template_file_validation["is_valid"] is False:
-                validation_errors['template_file'] = template_file_validation["error_message"]
-            comment_file_validation = self.validate_comment_file_type(comment_csv)
-            if template_file_validation["is_valid"] is False:
-                validation_errors['comment_file'] = comment_file_validation["error_message"]
-            if validation_errors:
-                print(validation_errors)
-                raise HandledException(
-                    ResponseCode.DOCUMENT_UPLOAD_FAILED,
-                    msg=f"업로드 파일 타입 검증 실패: {validation_errors}"
+            result = self.validate_ladder_zip_file_type(ladder_zip)
+            validation_results.append({
+                'title': '레더 ZIP 파일 타입 검증',
+                'is_valid': result['is_valid'],
+                'errors': result['errors']
+            })
+            
+            result = self.validate_template_file_type(template_xlsx)
+            validation_results.append({
+                'title': '템플릿 파일 타입 검증',
+                'is_valid': result['is_valid'],
+                'errors': result['errors']
+            })
+            
+            result = self.validate_comment_file_type(comment_csv)
+            validation_results.append({
+                'title': '커멘트 파일 타입 검증',
+                'is_valid': result['is_valid'],
+                'errors': result['errors']
+            })
+            
+            # Step 2: 템플릿 파일 구조 검증
+            logger.info("[Step 2] 템플릿 파일 구조 검증 시작")
+            result = self.validate_template_file_structure(template_xlsx)
+            validation_results.append({
+                'title': '템플릿 파일 구조 검증',
+                'is_valid': result['is_valid'],
+                'errors': result['errors']
+            })
+            if result['is_valid']:
+                template_data = result['data']
+                logger.info(f"템플릿 구조 검증 통과: {len(template_data['logic_ids'])}개 Logic ID")
+            
+            # Step 3: 레더 ZIP 파일 구조 검증
+            logger.info("[Step 3] 레더 ZIP 파일 구조 검증 시작")
+            result = self.validate_ladder_zip_structure(ladder_zip)
+            validation_results.append({
+                'title': '레더 ZIP 파일 구조 검증',
+                'is_valid': result['is_valid'],
+                'errors': result['errors']
+            })
+            if result['is_valid']:
+                ladder_zip_data = result['data']
+                logger.info(f"레더 ZIP 구조 검증 통과: {ladder_zip_data['file_count']}개 파일")
+            
+            # Step 4: 레더 파일 목록 매칭 (의존성 체크)
+            logger.info("[Step 4] 레더 파일 매칭 검증 시작")
+            if template_data and ladder_zip_data:
+                matched_files_data, result = self.validate_ladder_files_match(
+                    required_files=template_data['logic_ids'],
+                    actual_files=ladder_zip_data['file_list']
                 )
+                validation_results.append({
+                    'title': '레더 파일 목록 매칭',
+                    'is_valid': result['is_valid'],
+                    'errors': result['errors']
+                })
+                if matched_files_data:
+                    logger.info(f"파일 매칭 검증 통과: {len(matched_files_data)}개 매칭")
+            else:
+                validation_results.append({
+                    'title': '레더 파일 목록 매칭',
+                    'is_valid': False,
+                    'errors': ['이전 단계(템플릿 또는 ZIP 구조) 실패로 인해 실행 불가']
+                })
             
-            # 2. 템플릿 파일 구조 검증
-            validation_errors = {}
-            logger.info(f"[Step 2] 템플릿 파일 검증 시작")
-            template_file_validation_result = self.validate_template_file_structure(template_xlsx)
+            # Step 5: 매칭된 레더 CSV 파일들 구조 검증 (의존성 체크)
+            logger.info("[Step 5] 매칭된 레더 CSV 구조 검증 시작")
+            if matched_files_data:
+                result = self.validate_matched_ladder_csv_structures_in_memory(
+                    ladder_zip,
+                    matched_files_data
+                )
+                validation_results.append({
+                    'title': '매칭된 레더 CSV 구조 검증',
+                    'is_valid': result['is_valid'],
+                    'errors': result['errors']
+                })
+                if result['is_valid']:
+                    logger.info("레더 CSV 구조 검증 통과")
+            else:
+                validation_results.append({
+                    'title': '매칭된 레더 CSV 구조 검증',
+                    'is_valid': False,
+                    'errors': ['이전 단계(파일 매칭) 실패로 인해 실행 불가']
+                })
             
-            # 3. 레더 ZIP 파일 검증
-            logger.info(f"[Step 3] 레더 ZIP 파일 검증 시작")
-            ladder_zip_validation_result = self.validate_ladder_zip_structure(ladder_zip)
-
-            # 4. 레더 파일 목록 매칭 (Logic ID vs ZIP 내부 파일 목록)
-            logger.info(f"[Step 4] 레더 파일 매칭 검증 시작")
-            validation_result = self.validate_ladder_files_match(
-                required_files=template_file_validation_result['logic_ids'],
-                actual_files=ladder_zip_validation_result['file_list']
+            # Step 6: 커멘트 파일 구조 검증
+            logger.info("[Step 6] 커멘트 파일 구조 검증 시작")
+            comment_csv_bytes = comment_csv.file.read()
+            comment_csv.file.seek(0)  # 파일 포인터 복귀
+            
+            result = self.validate_csv_structure_from_bytes(
+                comment_csv_bytes,
+                comment_csv.filename,
+                self.settings.get_pgm_comment_csv_required_columns(),
+                self.settings.pgm_comment_csv_header_row
             )
-
-            # 5. 매칭된 레더 CSV 파일들 구조 검증 (메모리)
-            validation_errors = self.validate_matched_ladder_csv_structures_in_memory(ladder_zip, validation_result['matched_files'])
-            print(validation_errors)
-
+            validation_results.append({
+                'title': '커멘트 파일 구조 검증',
+                'is_valid': result['is_valid'],
+                'errors': [f"필수 컬럼 누락: {', '.join(result['missing_columns'])}"] if not result['is_valid'] else []
+            })
+            if result['is_valid']:
+                logger.info("커멘트 CSV 구조 검증 통과")
             
-            # 6. 커멘트 파일 구조 검증
-            validation_errors = {}
-            comment_csv_bytes = comment_csv.file.read()  # 커멘트 파일 내용 읽기
-            comment_csv.file.seek(0) # 파일 포인터 복귀
-            comment_csv_required_cols = self.settings.get_pgm_comment_csv_required_columns()
-            comment_csv_header_row = self.settings.pgm_comment_csv_header_row
-            validation_errors = self.validate_csv_structure_from_bytes(comment_csv_bytes, comment_csv.filename, comment_csv_required_cols, comment_csv_header_row)
-            print(validation_errors)
-
-
-
-
-            # # 5. 불필요한 파일 제거 (검증 통과 시)
-            # logger.info(f"[Step 5] 불필요한 파일 제거 시작")
-            # filtered_ladder_zip_file = self._filter_ladder_zip(
-            #     ladder_zip,
-            #     validation_result['matched_files']
-            # )
+            # 최종 결과 판정
+            all_passed = all(step['is_valid'] for step in validation_results)
             
-            # 결과 반환
-            return {
-                'validation_passed': validation_result['validation_passed'],
-                'summary': {
-                    'total_ladder_files': len(validation_result['matched_files'])
-                },
-                'message': '프로그램 파일 검증 작업이 성공적으로 완료되었습니다'
-            }
-            
+            if all_passed:
+                logger.info("모든 검증 단계 통과")
+                return {
+                    'validation_passed': True,
+                    'validation_results': validation_results
+                }
+            else:
+                failed_count = sum(1 for s in validation_results if not s['is_valid'])
+                logger.error(f"검증 실패: {failed_count}개 단계 실패")
+                
+                # 실패한 단계들 로그 출력
+                for step in validation_results:
+                    if not step['is_valid']:
+                        logger.error(f"  [{step['title']}] " + "; ".join(step['errors']))
+                
+                # 예외 발생 대신 결과 반환
+                return {
+                    'validation_passed': False,
+                    'validation_results': validation_results
+                }
+                
         except HandledException:
             raise
         except Exception as e:
             logger.error(f"프로그램 검증 작업 실패: {str(e)}", exc_info=True)
+            raise HandledException(
+                ResponseCode.DOCUMENT_UPLOAD_ERROR,
+                msg=f"프로그램 검증 작업 중 예상치 못한 오류 발생: {str(e)}",
+                e=e
+            )
     
     
     def file_path_to_upload_file(self, file_path: str) -> UploadFile:
@@ -150,45 +229,63 @@ class FileValidationUtils:
         if not ladder_zip or not ladder_zip.filename:
             return {
                 "is_valid": False,
-                "error_message": "레더 ZIP 파일이 업로드되지 않았습니다"
-        }
+                "errors": ["레더 ZIP 파일이 업로드되지 않았습니다"],
+                "data": None
+            }
         allowed_extensions = self.settings.pgm_ladder_zip_allowed_extensions.split(',')
         if not any(ladder_zip.filename.lower().endswith(ext) for ext in allowed_extensions):
             return {
                 "is_valid": False,
-                "error_message": f"레더 ZIP 파일은 압축파일 형식이어야 합니다({', '.join(allowed_extensions)})"
+                "errors": [f"레더 ZIP 파일은 압축파일 형식이어야 합니다({', '.join(allowed_extensions)})"],
+                "data": None
             }
-        return {"is_valid": True, "error_message": None}
+        return {
+            "is_valid": True,
+            "errors": [],
+            "data": None
+        }
 
     def validate_template_file_type(self, template_file: UploadFile) -> Dict[str, Any]:
         """템플릿 파일 타입 검증"""
         if not template_file or not template_file.filename:
             return {
                 "is_valid": False,
-                "error_message": "템플릿 파일이 업로드되지 않았습니다"
+                "errors": ["템플릿 파일이 업로드되지 않았습니다"],
+                "data": None
             }
         allowed_extensions = self.settings.pgm_template_allowed_extensions.split(',')
         if not any(template_file.filename.lower().endswith(ext) for ext in allowed_extensions):
             return {
                 "is_valid": False,
-                "error_message": f"템플릿 파일은 Excel파일 형식이어야 합니다({', '.join(allowed_extensions)})"
+                "errors": [f"템플릿 파일은 Excel파일 형식이어야 합니다({', '.join(allowed_extensions)})"],
+                "data": None
             }
-        return {"is_valid": True, "error_message": None}
+        return {
+            "is_valid": True,
+            "errors": [],
+            "data": None
+        }
 
     def validate_comment_file_type(self, comment_file: UploadFile) -> Dict[str, Any]:
         """커멘트 파일 타입 검증"""
         if not comment_file or not comment_file.filename:
             return {
                 "is_valid": False,
-                "error_message": "커멘트 파일이 업로드되지 않았습니다"
+                "errors": ["커멘트 파일이 업로드되지 않았습니다"],
+                "data": None
             }
         allowed_extensions = self.settings.pgm_comment_csv_allowed_extensions.split(',')
         if not any(comment_file.filename.lower().endswith(ext) for ext in allowed_extensions):
             return {
                 "is_valid": False,
-                "error_message": f"커멘트 파일은 csv파일 형식이어야 합니다({', '.join(allowed_extensions)})"
+                "errors": [f"커멘트 파일은 csv파일 형식이어야 합니다({', '.join(allowed_extensions)})"],
+                "data": None
             }
-        return {"is_valid": True, "error_message": None}
+        return {
+            "is_valid": True,
+            "errors": [],
+            "data": None
+        }
     
     def validate_ladder_zip_structure(self, zip_file: UploadFile) -> Dict:
         """
@@ -199,13 +296,13 @@ class FileValidationUtils:
             
         Returns:
             Dict: {
-                'file_list': List[str],  # ZIP 내부 파일명 리스트 (확장자 제외)
-                'file_count': int,
-                'is_valid': bool
+                'is_valid': bool,
+                'errors': List[str],
+                'data': {
+                    'file_list': List[str],  # ZIP 내부 파일명 리스트 (확장자 제외)
+                    'file_count': int
+                }
             }
-            
-        Raises:
-            HandledException: ZIP 파일 손상 또는 구조 오류
         """
         try:
             # 파일 내용 읽기
@@ -217,10 +314,11 @@ class FileValidationUtils:
                 # ZIP 파일 무결성 검증
                 bad_file = zip_ref.testzip()
                 if bad_file:
-                    raise HandledException(
-                        ResponseCode.INVALID_DATA_FORMAT,
-                        msg=f"손상된 파일이 포함되어 있습니다: {bad_file}"
-                    )
+                    return {
+                        'is_valid': False,
+                        'errors': [f"손상된 파일이 포함되어 있습니다: {bad_file}"],
+                        'data': None
+                    }
                 
                 # 파일 목록 추출 (디렉토리 제외)
                 all_files = [
@@ -240,22 +338,27 @@ class FileValidationUtils:
                 logger.info(f"레더 ZIP 파일 구조 검증 통과: {len(file_list)}개 파일")
                 
                 return {
-                    'file_list': file_list,
-                    'file_count': len(file_list),
-                    'is_valid': True
+                    'is_valid': True,
+                    'errors': [],
+                    'data': {
+                        'file_list': file_list,
+                        'file_count': len(file_list)
+                    }
                 }
         
         except zipfile.BadZipFile as e:
-            raise HandledException(
-                ResponseCode.INVALID_DATA_FORMAT,
-                msg=f"잘못된 ZIP 파일 형식입니다: {str(e)}"
-            )
+            return {
+                'is_valid': False,
+                'errors': [f"잘못된 ZIP 파일 형식입니다: {str(e)}"],
+                'data': None
+            }
         except Exception as e:
             logger.error(f"ZIP 구조 검증 실패: {str(e)}")
-            raise HandledException(
-                ResponseCode.INVALID_DATA_FORMAT,
-                msg=f"레더 ZIP 파일 구조 검증 중 오류가 발생했습니다: {str(e)}"
-            )
+            return {
+                'is_valid': False,
+                'errors': [f"레더 ZIP 파일 구조 검증 중 오류가 발생했습니다: {str(e)}"],
+                'data': None
+            }
 
     def validate_template_file_structure(self, xlsx_file: UploadFile) -> Dict[str, Any]:
         """
@@ -266,13 +369,13 @@ class FileValidationUtils:
             
         Returns:
             Dict: {
-                'logic_ids': List[str],  # Logic ID 리스트
-                'row_count': int,
-                'is_valid': bool
+                'is_valid': bool,
+                'errors': List[str],
+                'data': {
+                    'logic_ids': List[str],
+                    'row_count': int
+                }
             }
-            
-        Raises:
-            HandledException: 필수 컬럼 누락 또는 구조 오류
         """
         try:
             # Excel 파일 읽기 (메모리)
@@ -286,10 +389,11 @@ class FileValidationUtils:
             missing_cols = [col for col in required_cols if col not in df.columns]
             
             if missing_cols:
-                raise HandledException(
-                    ResponseCode.REQUIRED_FIELD_MISSING,
-                    msg=f"템플릿에 필수 컬럼이 없습니다: {', '.join(missing_cols)}"
-                )
+                return {
+                    'is_valid': False,
+                    'errors': [f"템플릿에 필수 컬럼이 없습니다: {', '.join(missing_cols)}"],
+                    'data': None
+                }
             
             # Logic ID 추출 1
             logic_ids_raw = df['Logic ID'].dropna().astype(str).tolist()
@@ -298,42 +402,50 @@ class FileValidationUtils:
             logic_ids = df['Logic ID'].dropna().astype(str).unique().tolist()
             
             if not logic_ids:
-                raise HandledException(
-                    ResponseCode.INVALID_DATA_FORMAT,
-                    msg="템플릿에 Logic ID가 없습니다"
-                )
+                return {
+                    'is_valid': False,
+                    'errors': ["템플릿에 Logic ID가 없습니다"],
+                    'data': None
+                }
+            
             diff_list = list(set(logic_ids_raw) - set(logic_ids))
             if diff_list != []:
-                raise HandledException(
-                    ResponseCode.INVALID_DATA_FORMAT,
-                    msg=f"템플릿에 중복된 Logic ID가 있습니다. 중복된 Logic ID {len(diff_list)}개({', '.join(diff_list)})"
-                )
+                return {
+                    'is_valid': False,
+                    'errors': [f"템플릿에 중복된 Logic ID가 있습니다. 중복된 Logic ID {len(diff_list)}개({', '.join(diff_list)})"],
+                    'data': None
+                }
             
             logger.info(f"템플릿 구조 검증 통과: {len(logic_ids)}개 Logic ID, {len(df)}개 행")
             
             return {
-                'logic_ids': logic_ids,
-                'row_count': len(df),
-                'is_valid': True
+                'is_valid': True,
+                'errors': [],
+                'data': {
+                    'logic_ids': logic_ids,
+                    'row_count': len(df)
+                }
             }
         
         except pd.errors.EmptyDataError:
-            raise HandledException(
-                ResponseCode.INVALID_DATA_FORMAT,
-                msg="템플릿 파일이 비어 있습니다"
-            )
+            return {
+                'is_valid': False,
+                'errors': ["템플릿 파일이 비어 있습니다"],
+                'data': None
+            }
         except Exception as e:
             logger.error(f"템플릿 구조 검증 실패: {str(e)}")
-            raise HandledException(
-                ResponseCode.INVALID_DATA_FORMAT,
-                msg=f"템플릿 파일 구조 검증 중 오류가 발생했습니다: {str(e)}"
-            )
+            return {
+                'is_valid': False,
+                'errors': [f"템플릿 파일 구조 검증 중 오류가 발생했습니다: {str(e)}"],
+                'data': None
+            }
     
     def validate_ladder_files_match(
         self,
         required_files: List[str],
         actual_files: List[str]
-    ) -> Dict[str, Any]:
+    ) -> tuple[Optional[List[str]], Dict[str, Any]]:
         """
         템플릿 Logic ID vs ZIP 파일 목록 비교
         
@@ -342,12 +454,12 @@ class FileValidationUtils:
             actual_files: ZIP 내부 파일명 리스트 (확장자 제외)
             
         Returns:
-            {
-                'matched_files': List[str],
-                'missing_files': List[str],
-                'extra_files': List[str],
-                'validation_passed': bool
-            }
+            Tuple[matched_files, result]:
+                - matched_files: 매칭된 파일 리스트 (실패 시 None)
+                - result: {
+                    'is_valid': bool,
+                    'errors': List[str]
+                  }
         """
         # 집합 연산
         required_set = set(required_files)
@@ -356,32 +468,30 @@ class FileValidationUtils:
         matched_files = list(required_set & actual_set)  # 교집합
         missing_files = list(required_set - actual_set)  # 필수이지만 누락된 파일
         extra_files = list(actual_set - required_set)    # 불필요한 파일
+        
         # 매칭 검증 통과 여부
         validation_passed = len(missing_files) == 0
-        
-        result = {
-            'matched_files': sorted(matched_files),
-            'missing_files': sorted(missing_files),
-            'extra_files': sorted(extra_files),
-            'validation_passed': validation_passed
-        }
         
         if validation_passed:
             logger.info(
                 f"레더 파일 매칭 검증 통과: "
                 f"{len(matched_files)}개 일치, {len(extra_files)}개 불필요"
             )
+            return sorted(matched_files), {
+                'is_valid': True,
+                'errors': []
+            }
         else:
-            raise HandledException(
-                ResponseCode.DOCUMENT_INVALID_FILE_TYPE,
-                msg=(
-                    f"레더 파일 매칭 검증 실패: "
-                    f"- {len(missing_files)}개 파일이 누락되었습니다: {', '.join(missing_files)}"
-                    f" - 누락된 파일: {', '.join(missing_files)}"
-                )
-            )
-        
-        return result
+            # 누락된 파일 목록을 보기 좋게 포맷 (최대 10개까지만 표시)
+            missing_with_ext = [f"{f}.csv" for f in sorted(missing_files)[:10]]
+            missing_display = ', '.join(missing_with_ext)
+            if len(missing_files) > 10:
+                missing_display += f" 외 {len(missing_files) - 10}개"
+            
+            return None, {
+                'is_valid': False,
+                'errors': [f"{len(missing_files)}개 파일이 누락되었습니다 ({missing_display})"]
+            }
 
     def filter_ladder_zip(
         self,
@@ -460,19 +570,20 @@ class FileValidationUtils:
             matched_files: 매칭된 파일명 리스트 (확장자 제외)
             
         Returns:
-            'is_valid': bool
-            
-        Raises:
-            HandledException: 하나라도 검증 실패 시
+            {
+                'is_valid': bool,
+                'errors': List[str],
+                'data': {
+                    'validated_count': int,
+                    'failed_files': List[Dict]
+                }
+            }
         """
-
         try:
             # ZIP 파일 읽기 (메모리)
             zip_bytes = ladder_zip_file.file.read()
-            ladder_zip_file.file.seek(0)  # 필수: 파일 포인터 복계
+            ladder_zip_file.file.seek(0)  # 필수: 파일 포인터 복귀
             
-            # validation_csv_result = {}
-            # failed_msg = []
             failed_files = []
             validated_count = 0
             
@@ -535,24 +646,41 @@ class FileValidationUtils:
                     f"{validated_count}개 파일 통과"
                 )
                 return {
-                    'is_valid': True
+                    'is_valid': True,
+                    'errors': [],
+                    'data': {
+                        'validated_count': validated_count,
+                        'failed_files': []
+                    }
                 }
             else:
                 logger.error("매칭된 레더 CSV 구조 검증 작업 완료(Fail)")
+                # 실패 파일 목록을 에러 메시지로 변환
+                error_messages = []
+                for failed in failed_files:
+                    if 'missing_columns' in failed:
+                        error_messages.append(
+                            f"{failed['filename']}: 필수 컬럼 누락 ({', '.join(failed['missing_columns'])})"
+                        )
+                    else:
+                        error_messages.append(f"{failed['filename']}: {failed.get('error', '알 수 없는 오류')}")
+                
                 return {
                     'is_valid': False,
-                    'failed_files': failed_files
-                }        
-            return is_valid
+                    'errors': error_messages,
+                    'data': {
+                        'validated_count': validated_count,
+                        'failed_files': failed_files
+                    }
+                }
         
-        except HandledException:
-            raise
         except Exception as e:
             logger.error(f"레더 CSV 구조 검증 중 오류 발생: {str(e)}")
-            raise HandledException(
-                ResponseCode.INVALID_DATA_FORMAT,
-                msg=f"레더 CSV 구조 검증 중 오류 발생: {str(e)}"
-            )
+            return {
+                'is_valid': False,
+                'errors': [f"레더 CSV 구조 검증 중 오류 발생: {str(e)}"],
+                'data': None
+            }
     
     def validate_csv_structure_from_bytes(
             self,
